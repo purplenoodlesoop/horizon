@@ -20,12 +20,6 @@
         in
         {
           flake.packages.default = horizon;
-          flake.packages.horizon = horizon;
-          # `nix run` resolves to apps.default; the module auto-wraps
-          # ${pkg}/bin/${name}, so the binary's mainProgram must
-          # match the attribute name (it does: "horizon").
-          flake.apps.horizon = horizon;
-          flake.apps.default = horizon;
         };
     };
 }

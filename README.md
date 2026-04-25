@@ -56,29 +56,10 @@ Three properties make this different from the other personal-assistant framework
 #   TELEGRAM_USERNAME=<your-telegram-username>
 #   TAVILY_TOKEN=<tavily key, optional, enables web_search>
 
-nix run github:purplenoodlesoop/horizon -- \
-  --vault ./vault \
-  --heartbeat 1800 \
-  --mode human
+nix run github:purplenoodlesoop/horizon
 ```
 
 The flake bundles the templates and the tool allowlist into the package, so the binary works from any directory. On first run, an empty vault gets bootstrapped with the default capability set.
-
-For frequent use, `nix profile install github:purplenoodlesoop/horizon` puts `horizon` on your PATH; with `direnv`, `echo "use flake" > .envrc && direnv allow` puts you in a dev shell with `dart` available.
-
-## Quick start (dart, local clone)
-
-```sh
-git clone https://github.com/purplenoodlesoop/horizon
-cd horizon
-dart pub get
-dart run build_runner build --delete-conflicting-outputs
-
-# Make sure .env has TELEGRAM_TOKEN, FIREWORKS_TOKEN, TELEGRAM_USERNAME,
-# and optionally TAVILY_TOKEN.
-
-dart run bin/horizon.dart --vault ./vault --heartbeat 1800
-```
 
 ---
 
@@ -293,6 +274,7 @@ Append to `config/allowlist.yaml`:
 Restart the harness. The new tool surfaces in the system prompt automatically. Secret credentials (API keys) should be passed via env vars (added to `executor.dart`'s `Process.run` env) and referenced as `$VAR_NAME` in the template — never substituted via `{var}`, since substitution puts them in the rendered command string.
 
 Custom param types currently recognized:
+
 - `path` — validated to stay under the vault root (no `..` traversal)
 - `telegram_chat_id` — validated to appear in `_horizon/messages/` frontmatter
 
