@@ -1,0 +1,1 @@
+This is a heartbeat tick — the listed capabilities have declared themselves due to run on this schedule. Load and execute them. If after loading them you find nothing actionable to do right now, reply with the single token HEARTBEAT_OK and nothing else — the harness will suppress that reply so the user is not notified of a no-op.

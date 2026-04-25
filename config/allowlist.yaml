@@ -1,0 +1,109 @@
+tools:
+  - name: read_file
+    description: Read a file from the vault
+    parameters:
+      path:
+        type: path
+        description: Relative path within the vault
+    command: "cat {vault_path}/{path}"
+
+  - name: write_file
+    description: Write content to a file in the vault, OVERWRITING any existing content. Use this for new files or when you intentionally want to replace the entire file. For appending to an existing file (journals, logs), use append_file instead — write_file with partial content silently truncates the rest.
+    parameters:
+      path:
+        type: path
+        description: Relative path within the vault (will create directories)
+      content:
+        type: string
+        description: Full file content to write. Whatever was in the file before is gone after this call.
+    command: "mkdir -p $(dirname {vault_path}/{path}) && printf '%s' {content} > {vault_path}/{path}"
+
+  - name: append_file
+    description: Append content to the end of a vault file without touching anything that's already there. Creates the file if it doesn't exist. Use this for journals, logs, and any file where the convention is "add a new line/entry" — write_file with partial content would truncate the existing entries.
+    parameters:
+      path:
+        type: path
+        description: Relative path within the vault (will create directories)
+      content:
+        type: string
+        description: Content to append. Include a leading newline if you want a line break before your addition.
+    command: "mkdir -p $(dirname {vault_path}/{path}) && printf '%s' {content} >> {vault_path}/{path}"
+
+  - name: list_files
+    description: List all markdown files in the vault
+    command: "find {vault_path} -name '*.md' -type f 2>/dev/null | sort"
+
+  - name: search_vault
+    description: Search vault files for a pattern
+    parameters:
+      query:
+        type: string
+        description: Search query (grep pattern)
+    command: "grep -rliE {query} {vault_path} --include='*.md' 2>/dev/null"
+
+  - name: count_matches
+    description: Counts the number of vault files whose contents match a regex, scoped to a path glob. Returns a single integer. Use whenever the user asks "how many" of something — the LLM is unreliable at counting lists by inspection over ~10 items, so reach for this instead.
+    parameters:
+      query:
+        type: string
+        description: Extended regex (grep -E) to match against file contents.
+      path:
+        type: string
+        description: Path glob relative to vault root, e.g. "todos/*.md", "people/*.md".
+    command: "find {vault_path} -type f -wholename {vault_path}/{path} -exec grep -lE {query} {} + 2>/dev/null | wc -l | tr -d ' '"
+
+  - name: delete_file
+    description: Delete a file from the vault
+    parameters:
+      path:
+        type: path
+        description: Relative path within the vault
+    command: "rm -f {vault_path}/{path}"
+
+  - name: now
+    description: Returns the current UTC date and time in ISO 8601 format (e.g. 2026-04-25T14:30:00Z). Use when you need to know what time it is now, what today's date is, or to compute a date relative to now.
+    command: "date -u +%Y-%m-%dT%H:%M:%SZ"
+
+  - name: list_files_glob
+    description: List vault files matching a glob pattern. Two modes - if the pattern contains a slash, it's matched against the path relative to vault root (e.g. "todos/*.md" finds md files directly under todos/, "_horizon/turns/*.md" finds turn records). If the pattern has no slash, it's matched against the basename anywhere in the vault recursively (e.g. "*.json" finds all JSON files). Note - "*" never crosses "/", and "**" is NOT supported - use a basename-only pattern for "anywhere recursive".
+    parameters:
+      pattern:
+        type: string
+        description: Glob pattern. With a slash - path relative to vault root, "*" matches one segment. Without a slash - basename matched recursively. Examples - "todos/*.md", "_horizon/turns/*.md", "*.json", "people/*.md"
+    command: "case {pattern} in */*) find {vault_path} -type f -wholename {vault_path}/{pattern} 2>/dev/null ;; *) find {vault_path} -type f -name {pattern} 2>/dev/null ;; esac | sort"
+
+  - name: fetch_url
+    description: Fetch a URL and return its raw response body. Use for JSON APIs, plain-text endpoints, or when you specifically want raw HTML. For human-readable web pages, prefer fetch_url_text which strips HTML to readable markdown.
+    parameters:
+      url:
+        type: string
+        description: Full URL including https:// or http://
+    command: "curl -sSL --max-time 20 -A 'Horizon/1.0' {url}"
+
+  - name: fetch_url_text
+    description: Fetch a webpage and return readable markdown via Jina Reader. Use for HTML pages where you want clean text content without ads, nav, or markup noise.
+    parameters:
+      url:
+        type: string
+        description: Full URL including https:// or http://
+    command: "curl -sSL --max-time 30 -A 'Horizon/1.0' 'https://r.jina.ai/'{url}"
+
+  - name: web_search
+    description: Search the web with Tavily and return top results as JSON. Use when you need information from the web that you don't already know - news, current facts, references, anything beyond the vault.
+    parameters:
+      query:
+        type: string
+        description: Search query in plain English
+    command: "jq -n --arg key \"$TAVILY_TOKEN\" --arg q {query} '{api_key:$key,query:$q,max_results:5,search_depth:\"basic\"}' | curl -sS --max-time 30 -X POST 'https://api.tavily.com/search' -H 'Content-Type: application/json' -d @-"
+
+  - name: send_telegram
+    description: Send a message proactively to a Telegram chat. Use when something the user should know about happens outside an active conversation - a scheduled reminder firing, a pattern noticed, a deadline approaching. To find a chat_id, look at recent inbound messages in _horizon/messages/ - their frontmatter has chat_id when channel is telegram. The harness rejects any chat_id that has not previously sent us an accepted message. Do not send without a real reason; the user will lose trust if you spam.
+    parameters:
+      chat_id:
+        type: telegram_chat_id
+        description: Telegram chat_id of the user. Must be a chat_id that has previously sent the bot an accepted message (i.e. present in _horizon/messages/ frontmatter). The harness validates this and rejects unknown chat_ids.
+      text:
+        type: string
+        description: Plain-text message body, max ~4000 characters per Telegram limit.
+    command: "curl -sS --max-time 15 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage\" --data-urlencode chat_id={chat_id} --data-urlencode text={text}"
+

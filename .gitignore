@@ -1,0 +1,23 @@
+# Dart
+.dart_tool/
+build/
+
+# Environment
+.env
+
+# Vault (personal data) — anchored at repo root, so lib/src/vault/ is NOT ignored
+/vault/
+
+# Test vaults (created on demand by acceptance runs)
+/phase*_vault/
+/*-centralized_vault/
+/centralized_vault/
+/federated_vault/
+/blackboard_vault/
+/semi_centralized_vault/
+
+# Runtime logs
+/logs/
+
+# macOS
+.DS_Store
