@@ -3,6 +3,7 @@ import "dart:convert";
 
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
+import "package:horizon/src/agent/agent_event.dart";
 import "package:horizon/src/tool/allowlist.dart";
 import "package:horizon/src/tool/executor.dart";
 import "package:mark/mark.dart";
@@ -10,15 +11,15 @@ import "package:openai_dart/openai_dart.dart";
 
 const _model = "accounts/fireworks/models/kimi-k2p5";
 const _fireworksBaseUrl = "https://api.fireworks.ai/inference/v1";
-const _requestTimeout = Duration(seconds: 60);
-const _maxRetries = 2;
-
-typedef AgentRunResult = ({
-  String? text,
-  IList<String> writtenPaths,
-  IList<String> toolsCalled,
-  IList<String> capabilitiesRead,
-});
+// Idle timeout: longest allowable gap between SSE chunks. Resets on
+// every chunk. Lets long completions keep flowing as long as tokens
+// keep arriving; only fails on truly stuck connections. Prior wall-
+// clock 60s timeout fired on slow-but-progressing streams.
+const _idleTimeout = Duration(seconds: 90);
+// Retry only the establishment phase: if the stream fails before any
+// chunk arrives. Mid-stream failures are not retried because partial
+// output may already be visible to the user.
+const _maxEstablishmentRetries = 2;
 
 const _capabilitiesPrefix = "_horizon/capabilities/";
 
@@ -47,7 +48,7 @@ Tool _buildTool(AllowlistedTool tool) => Tool.function(
   },
 );
 
-class RunAgentLlm extends Fx<AgentRunResult?> {
+class RunAgentLlm extends StreamFx<AgentEvent> {
   RunAgentLlm({
     required String fireworksToken,
     required String systemPrompt,
@@ -58,7 +59,7 @@ class RunAgentLlm extends Fx<AgentRunResult?> {
     required String tavilyToken,
     required Logger logger,
     required String agentId,
-  }) : super(() async {
+  }) : super(() async* {
           final client = OpenAIClient.withApiKey(
             fireworksToken,
             baseUrl: _fireworksBaseUrl,
@@ -69,7 +70,7 @@ class RunAgentLlm extends Fx<AgentRunResult?> {
             ChatMessage.user(userMessage),
           ];
           try {
-            return await _runLoop(
+            yield* _runLoop(
               client: client,
               messages: messages,
               tools: tools,
@@ -86,41 +87,130 @@ class RunAgentLlm extends Fx<AgentRunResult?> {
         });
 }
 
-Future<ChatCompletion> _requestWithTimeout(
-  OpenAIClient client,
-  ChatCompletionCreateRequest request,
-  Logger logger,
-  String agentId,
-) async {
-  for (var attempt = 0; attempt <= _maxRetries; attempt++) {
-    try {
-      return await client.chat.completions
-          .create(request)
-          .timeout(_requestTimeout);
-    } on TimeoutException {
-      logger.warning(
-        "[$agentId] LLM request timed out "
-        "(attempt ${attempt + 1}/${_maxRetries + 1})",
-      );
-      if (attempt == _maxRetries) {
-        rethrow;
-      }
-    } on OpenAIException catch (e) {
-      logger.warning(
-        "[$agentId] LLM error: $e "
-        "(attempt ${attempt + 1}/${_maxRetries + 1})",
-      );
-      if (attempt == _maxRetries) {
-        rethrow;
+/// Streams a single LLM call and emits per-cycle deltas. Returns
+/// the final accumulator (with content, reasoning, tool calls,
+/// finish reason, usage) when the SSE stream ends.
+///
+/// Idle timeout: cancels and retries (up to [_maxEstablishmentRetries]
+/// total attempts) only if the failure happens before the first
+/// chunk arrives. Once any chunk has been emitted, errors propagate.
+Stream<AgentEvent> _streamCycle({
+  required OpenAIClient client,
+  required ChatCompletionCreateRequest request,
+  required Logger logger,
+  required String agentId,
+  required void Function(ChatStreamAccumulator) onComplete,
+}) async* {
+  for (var attempt = 0; attempt <= _maxEstablishmentRetries; attempt++) {
+    final controller = StreamController<AgentEvent>();
+    Timer? idleTimer;
+    var firstChunkArrived = false;
+    StreamSubscription<ChatStreamAccumulator>? sub;
+    ChatStreamAccumulator? lastAcc;
+    var lastReasoningLen = 0;
+    var lastContentLen = 0;
+
+    void teardown() {
+      idleTimer?.cancel();
+      idleTimer = null;
+      final s = sub;
+      if (s != null) {
+        unawaited(s.cancel());
       }
     }
+
+    void failAndClose(Object error, [StackTrace? st]) {
+      controller.addError(error, st);
+      unawaited(controller.close());
+    }
+
+    void resetIdle() {
+      idleTimer?.cancel();
+      idleTimer = Timer(_idleTimeout, () {
+        if (controller.isClosed) {
+          return;
+        }
+        teardown();
+        failAndClose(
+          TimeoutException(
+            "LLM stream idle for ${_idleTimeout.inSeconds}s",
+          ),
+        );
+      });
+    }
+
+    resetIdle();
+    sub = client.chat.completions
+        .createStreamWithAccumulator(request)
+        .listen(
+      (acc) {
+        firstChunkArrived = true;
+        resetIdle();
+        lastAcc = acc;
+        // Reasoning: prefer reasoning_content, fall back to reasoning.
+        final r = acc.reasoningContent.isNotEmpty
+            ? acc.reasoningContent
+            : acc.reasoning;
+        if (r.length > lastReasoningLen) {
+          final delta = r.substring(lastReasoningLen);
+          lastReasoningLen = r.length;
+          if (!controller.isClosed) {
+            controller.add(AgentReasoningDelta(delta));
+          }
+        }
+        final c = acc.content;
+        if (c.length > lastContentLen) {
+          final delta = c.substring(lastContentLen);
+          lastContentLen = c.length;
+          if (!controller.isClosed) {
+            controller.add(AgentTextDelta(delta));
+          }
+        }
+      },
+      onDone: () {
+        teardown();
+        if (controller.isClosed) {
+          return;
+        }
+        final acc = lastAcc;
+        if (acc != null) {
+          onComplete(acc);
+        }
+        unawaited(controller.close());
+      },
+      onError: (Object e, StackTrace st) {
+        teardown();
+        if (controller.isClosed) {
+          return;
+        }
+        failAndClose(e, st);
+      },
+    );
+
+    try {
+      yield* controller.stream;
+      // Successful completion of the inner stream — break out.
+      return;
+    } on Object catch (e) {
+      // Establishment-phase failure: retry. Otherwise propagate.
+      if (firstChunkArrived || attempt >= _maxEstablishmentRetries) {
+        rethrow;
+      }
+      logger.warning(
+        "[$agentId] LLM stream error before any chunk: $e — "
+        "retry ${attempt + 1}/$_maxEstablishmentRetries",
+      );
+      continue;
+    } finally {
+      // Defensive: cancel even on consumer-cancellation paths where
+      // `controller.stream` ends without our onDone/onError firing.
+      await sub.cancel();
+      idleTimer?.cancel();
+    }
   }
-  throw TimeoutException(
-    "LLM request failed after ${_maxRetries + 1} attempts",
-  );
 }
 
-Future<AgentRunResult?> _runLoop({
+Stream<AgentEvent> _runLoop({
   required OpenAIClient client,
   required List<ChatMessage> messages,
   required List<Tool> tools,
@@ -130,7 +220,7 @@ Future<AgentRunResult?> _runLoop({
   required String tavilyToken,
   required Logger logger,
   required String agentId,
-}) async {
+}) async* {
   var current = messages;
   final writtenPaths = <String>[];
   final toolsCalled = <String>[];
@@ -140,23 +230,41 @@ Future<AgentRunResult?> _runLoop({
   var totalCompletion = 0;
   var requestCount = 0;
   var nudgedForReply = false;
+
   while (true) {
     logger.debug(
-      "[$agentId] LLM request "
+      "[$agentId] LLM stream "
       "(${current.length} messages)",
     );
-    final response = await _requestWithTimeout(
-      client,
-      ChatCompletionCreateRequest(
+
+    ChatStreamAccumulator? accumulator;
+    yield* _streamCycle(
+      client: client,
+      request: ChatCompletionCreateRequest(
         model: _model,
         messages: current,
         tools: tools,
       ),
-      logger,
-      agentId,
+      logger: logger,
+      agentId: agentId,
+      onComplete: (acc) => accumulator = acc,
     );
+
     requestCount++;
-    final usage = response.usage;
+
+    if (accumulator == null) {
+      logger.warning("[$agentId] Stream ended with no accumulator");
+      yield AgentFinished((
+        text: null,
+        writtenPaths: writtenPaths.toIList(),
+        toolsCalled: toolsCalled.toIList(),
+        capabilitiesRead: capabilitiesRead.toIList(),
+      ));
+      return;
+    }
+
+    final acc = accumulator!;
+    final usage = acc.usage;
     if (usage != null) {
       final prompt = usage.promptTokens;
       final cached = usage.promptTokensDetails?.cachedTokens ?? 0;
@@ -170,166 +278,168 @@ Future<AgentRunResult?> _runLoop({
         "($pct%) completion=$completion",
       );
     }
-    final choice = response.choices.firstOrNull;
+
+    final completion = acc.toChatCompletion();
+    final choice = completion.choices.firstOrNull;
     if (choice == null) {
       logger.warning("[$agentId] Empty response from LLM");
-      return null;
-    }
-    final message = choice.message;
-    final toolCalls = message.toolCalls;
-
-    // No tool calls — model returned text directly.
-    if (toolCalls == null || toolCalls.isEmpty) {
-      final raw = message.content?.trim() ?? "";
-      // Fallback for models that route output to reasoning fields
-      // (Kimi K2.5 sometimes produces only reasoning tokens after
-      // heavy tool work, leaving content empty). Not ideal — the
-      // text may read as "thinking aloud" — but it's better than
-      // silent failure.
-      final reasoningC = message.reasoningContent?.trim() ?? "";
-      final reasoningR = message.reasoning?.trim() ?? "";
-      final reasoningRaw = reasoningC.isNotEmpty ? reasoningC : reasoningR;
-      final effective = raw.isNotEmpty ? raw : reasoningRaw;
-      if (raw.isEmpty && reasoningRaw.isNotEmpty) {
-        logger.warning(
-          "[$agentId] content empty, falling back to reasoning "
-          "(${reasoningRaw.length} chars)",
-        );
-      }
-      // Surface explicit refusals as themselves rather than silently
-      // dropping them.
-      final refusal = message.refusal?.trim();
-      final fromRefusal = refusal != null && refusal.isNotEmpty
-          ? "(model refused) $refusal"
-          : null;
-      final text = effective.isEmpty ||
-              effective.startsWith("(Empty response:")
-          ? fromRefusal
-          : effective;
-
-      // Kimi K2.5 occasionally finishes a turn with no reply text
-      // after doing real work — treats "I read/wrote the files" as
-      // the response. For a Telegram user this looks like the bot
-      // ignored them. One-shot harness-side nudge: ask the model to
-      // send the reply it forgot. Fires at most once per turn,
-      // whenever any tools were called (read-only retrieval or
-      // write-side action both count).
-      if (text == null && toolsCalled.isNotEmpty && !nudgedForReply) {
-        logger.warning(
-          "[$agentId] Silent finish with ${toolsCalled.length} "
-          "tool call(s) — nudging once for a reply",
-        );
-        nudgedForReply = true;
-        current = [
-          ...current,
-          ChatMessage.assistant(content: message.content ?? ""),
-          ChatMessage.user(
-            "You finished the work but did not send a reply to the "
-            "user. Send a brief confirmation or answer now using "
-            "what you found. Do not call any more tools.",
-          ),
-        ];
-        continue;
-      }
-
-      _logTotals(
-        logger: logger,
-        agentId: agentId,
-        requestCount: requestCount,
-        totalPrompt: totalPrompt,
-        totalCached: totalCached,
-        totalCompletion: totalCompletion,
-      );
-      if (text == null && writtenPaths.isEmpty) {
-        logger.debug("[$agentId] No output");
-        return (
-          text: null,
-          writtenPaths: const IList<String>.empty(),
-          toolsCalled: toolsCalled.toIList(),
-          capabilitiesRead: capabilitiesRead.toIList(),
-        );
-      }
-      logger.debug(
-        "[$agentId] Done — "
-        "${writtenPaths.length} write(s), "
-        "reply: ${text != null}",
-      );
-      return (
-        text: text,
+      yield AgentFinished((
+        text: null,
         writtenPaths: writtenPaths.toIList(),
         toolsCalled: toolsCalled.toIList(),
         capabilitiesRead: capabilitiesRead.toIList(),
-      );
+      ));
+      return;
     }
 
-    current = [
-      ...current,
-      ChatMessage.assistant(
-        content: message.content,
-        toolCalls: toolCalls,
-      ),
-    ];
+    final message = choice.message;
+    final toolCalls = message.toolCalls;
 
-    // Tool calls in a single LLM response are concurrent per the
-    // OpenAI tool-calling protocol — the model knows it's
-    // requesting parallel work. We parallelize them with
-    // Future.wait, then append results in original call order so
-    // the conversation history matches the model's expectation.
-    // Trackers (toolsCalled, writtenPaths, capabilitiesRead) update
-    // synchronously from the call args before launching, so they
-    // see every call regardless of when it finishes.
-    final parsedArgs = <IMap<String, String>>[];
-    for (final call in toolCalls) {
-      final args = _parseArgs(call.function.arguments);
-      parsedArgs.add(args);
-      logger.debug(
-        "[$agentId] Tool: ${call.function.name}"
-        "(${call.function.arguments})",
-      );
-      toolsCalled.add(call.function.name);
-      if (call.function.name == "write_file") {
-        final path = args["path"];
-        if (path != null && !writtenPaths.contains(path)) {
-          writtenPaths.add(path);
-        }
+    // Cycle ends in tool calls — any content streamed during this
+    // cycle was intermediate narration, not the final answer.
+    if (toolCalls != null && toolCalls.isNotEmpty) {
+      if (acc.content.isNotEmpty) {
+        yield const AgentTextReset();
       }
-      if (call.function.name == "read_file") {
-        final path = args["path"];
-        if (path != null && path.startsWith(_capabilitiesPrefix)) {
-          if (!capabilitiesRead.contains(path)) {
-            capabilitiesRead.add(path);
-          }
-        }
-      }
-    }
-    final toolResults = await Future.wait([
-      for (var i = 0; i < toolCalls.length; i++)
-        ExecuteTool(
-          allowlist: allowlist,
-          toolName: toolCalls[i].function.name,
-          toolArgs: parsedArgs[i],
-          vaultPath: vaultPath,
-          telegramToken: telegramToken,
-          tavilyToken: tavilyToken,
-        ),
-    ]);
-    for (var i = 0; i < toolCalls.length; i++) {
-      final call = toolCalls[i];
-      final result = toolResults[i];
-      logger.debug(
-        "[$agentId] Tool result [${call.function.name}]: "
-        "${result.length > 200
-            ? '${result.substring(0, 200)}...'
-            : result}",
-      );
+
       current = [
         ...current,
-        ChatMessage.tool(
-          toolCallId: call.id,
-          content: result,
+        ChatMessage.assistant(
+          content: message.content,
+          toolCalls: toolCalls,
         ),
       ];
+
+      // Emit start events synchronously, run executions in parallel,
+      // then emit finish events in original order.
+      final parsedArgs = <IMap<String, String>>[];
+      for (final call in toolCalls) {
+        final args = _parseArgs(call.function.arguments);
+        parsedArgs.add(args);
+        logger.debug(
+          "[$agentId] Tool: ${call.function.name}"
+          "(${call.function.arguments})",
+        );
+        toolsCalled.add(call.function.name);
+        if (call.function.name == "write_file") {
+          final path = args["path"];
+          if (path != null && !writtenPaths.contains(path)) {
+            writtenPaths.add(path);
+          }
+        }
+        if (call.function.name == "read_file") {
+          final path = args["path"];
+          if (path != null && path.startsWith(_capabilitiesPrefix)) {
+            if (!capabilitiesRead.contains(path)) {
+              capabilitiesRead.add(path);
+            }
+          }
+        }
+        yield AgentToolStarted(name: call.function.name, args: args);
+      }
+
+      final toolResults = await Future.wait([
+        for (var i = 0; i < toolCalls.length; i++)
+          ExecuteTool(
+            allowlist: allowlist,
+            toolName: toolCalls[i].function.name,
+            toolArgs: parsedArgs[i],
+            vaultPath: vaultPath,
+            telegramToken: telegramToken,
+            tavilyToken: tavilyToken,
+          ),
+      ]);
+
+      for (var i = 0; i < toolCalls.length; i++) {
+        final call = toolCalls[i];
+        final result = toolResults[i];
+        final ok = !result.startsWith("Error");
+        logger.debug(
+          "[$agentId] Tool result [${call.function.name}]: "
+          "${result.length > 200 ? '${result.substring(0, 200)}...' : result}",
+        );
+        yield AgentToolFinished(name: call.function.name, ok: ok);
+        current = [
+          ...current,
+          ChatMessage.tool(toolCallId: call.id, content: result),
+        ];
+      }
+      continue;
     }
+
+    // No tool calls — final cycle.
+    final raw = message.content?.trim() ?? "";
+    final reasoningC = message.reasoningContent?.trim() ?? "";
+    final reasoningR = message.reasoning?.trim() ?? "";
+    final reasoningRaw = reasoningC.isNotEmpty ? reasoningC : reasoningR;
+    final effective = raw.isNotEmpty ? raw : reasoningRaw;
+    if (raw.isEmpty && reasoningRaw.isNotEmpty) {
+      logger.warning(
+        "[$agentId] content empty, falling back to reasoning "
+        "(${reasoningRaw.length} chars)",
+      );
+    }
+    final refusal = message.refusal?.trim();
+    final fromRefusal = refusal != null && refusal.isNotEmpty
+        ? "(model refused) $refusal"
+        : null;
+    final text = effective.isEmpty || effective.startsWith("(Empty response:")
+        ? fromRefusal
+        : effective;
+
+    // Kimi K2.5 occasionally finishes with no reply text after doing
+    // real work — nudges once. See history of this comment for
+    // rationale.
+    if (text == null && toolsCalled.isNotEmpty && !nudgedForReply) {
+      logger.warning(
+        "[$agentId] Silent finish with ${toolsCalled.length} "
+        "tool call(s) — nudging once for a reply",
+      );
+      nudgedForReply = true;
+      // Streamed nothing this cycle was useful; drop it.
+      yield const AgentTextReset();
+      current = [
+        ...current,
+        ChatMessage.assistant(content: message.content ?? ""),
+        ChatMessage.user(
+          "You finished the work but did not send a reply to the "
+          "user. Send a brief confirmation or answer now using "
+          "what you found. Do not call any more tools.",
+        ),
+      ];
+      continue;
+    }
+
+    _logTotals(
+      logger: logger,
+      agentId: agentId,
+      requestCount: requestCount,
+      totalPrompt: totalPrompt,
+      totalCached: totalCached,
+      totalCompletion: totalCompletion,
+    );
+
+    if (text == null && writtenPaths.isEmpty) {
+      logger.debug("[$agentId] No output");
+      yield AgentFinished((
+        text: null,
+        writtenPaths: const IList<String>.empty(),
+        toolsCalled: toolsCalled.toIList(),
+        capabilitiesRead: capabilitiesRead.toIList(),
+      ));
+      return;
+    }
+    logger.debug(
+      "[$agentId] Done — ${writtenPaths.length} write(s), "
+      "reply: ${text != null}",
+    );
+    yield AgentFinished((
+      text: text,
+      writtenPaths: writtenPaths.toIList(),
+      toolsCalled: toolsCalled.toIList(),
+      capabilitiesRead: capabilitiesRead.toIList(),
+    ));
+    return;
   }
 }
 

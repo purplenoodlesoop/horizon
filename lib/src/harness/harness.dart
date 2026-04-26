@@ -4,6 +4,7 @@ import "dart:io";
 
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
+import "package:horizon/src/agent/pipeline.dart";
 import "package:horizon/src/agent/pipelines/centralized.dart";
 import "package:horizon/src/capability/capability.dart";
 import "package:horizon/src/capability/lint.dart";
@@ -193,26 +194,111 @@ Future<void> _processEvent({
     heartbeatMode: isHeartbeat,
   );
   final replies = <String>[];
+  TelegramLiveReply? live;
+  if (event.channel is TelegramChannel && !isHeartbeat && !isAgent) {
+    live = TelegramLiveReply(
+      token: config.telegramToken,
+      chatId: (event.channel as TelegramChannel).value.chatId,
+    );
+  }
+  var streamingToStdout = false;
+  var streamedAnyText = false;
   try {
-    await for (final result in pipeline) {
-      final text = result.agentText;
-      if (text != null) {
-        final timed = _withTiming(text, stopwatch.elapsed, event.channel);
-        replies.add(timed);
-        if (isAgent) {
-          _logJson({"type": "agent_reply", "text": timed});
-        } else {
-          logger.info("[reply] $timed");
-          await SendReply(
-            channel: event.channel,
-            text: timed,
-            telegramToken: config.telegramToken,
-          );
-        }
+    await for (final pe in pipeline) {
+      switch (pe) {
+        case PipelineReasoningDelta(:final text):
+          if (live != null) {
+            live.showReasoning(text);
+          } else if (isAgent) {
+            _logJson({"type": "reasoning_delta", "text": text});
+          }
+        case PipelineTextDelta(:final text):
+          if (live != null) {
+            live.showAnswer(text);
+          } else if (isAgent) {
+            _logJson({"type": "text_delta", "text": text});
+          } else {
+            // CLI: write tokens as they stream.
+            stdout.write(text);
+            streamingToStdout = true;
+            streamedAnyText = true;
+          }
+        case PipelineTextReset():
+          if (live != null) {
+            live.resetAnswer();
+          } else if (isAgent) {
+            _logJson({"type": "text_reset"});
+          } else if (streamingToStdout) {
+            // Visually mark intermediate narration was discarded
+            // so the user understands the next text is the real
+            // answer.
+            stdout
+              ..writeln()
+              ..writeln("[discarded intermediate narration]");
+            streamingToStdout = false;
+            streamedAnyText = false;
+          }
+        case PipelineToolStarted(:final name, :final args):
+          if (live != null) {
+            live.showTool(name, args);
+          } else if (isAgent) {
+            _logJson({
+              "type": "tool_started",
+              "name": name,
+              "args": args.unlock,
+            });
+          } else {
+            if (streamingToStdout) {
+              stdout.writeln();
+              streamingToStdout = false;
+            }
+            logger.debug("[tool] $name(${_briefArgs(args)})");
+          }
+        case PipelineToolFinished(:final name, :final ok):
+          if (isAgent) {
+            _logJson({"type": "tool_finished", "name": name, "ok": ok});
+          }
+        case PipelineReply(:final text):
+          if (text != null) {
+            final timed = _withTiming(text, stopwatch.elapsed, event.channel);
+            replies.add(timed);
+            if (isAgent) {
+              _logJson({"type": "agent_reply", "text": timed});
+            } else if (live != null) {
+              await live.finalize(timed);
+              logger.info("[reply] $timed");
+            } else if (streamedAnyText) {
+              // Text already in stdout; just append the timing footer
+              // and a debug log line for the file logger. Avoid
+              // logger.info because that would re-print the full
+              // reply on the console.
+              if (streamingToStdout) {
+                stdout.writeln();
+                streamingToStdout = false;
+              }
+              final footer = _trailingFooter(
+                timed.substring(text.length),
+              );
+              if (footer.isNotEmpty) {
+                stdout.writeln(footer);
+              }
+              logger.debug("[reply] (${text.length} chars) $timed");
+            } else {
+              logger.info("[reply] $timed");
+              await SendReply(
+                channel: event.channel,
+                text: timed,
+                telegramToken: config.telegramToken,
+              );
+            }
+          }
       }
     }
   } finally {
     typingTimer?.cancel();
+    if (streamingToStdout) {
+      stdout.writeln();
+    }
   }
 
   // Append the outbound side once the pipeline drains.
@@ -245,6 +331,24 @@ void _logBlue(String message) {
 /// Appends "(took Xs)" / "(took Xm Ys)" to the reply, italicized
 /// on Telegram via HTML, plain on CLI. Helps the user see how long
 /// the orchestrator spent on this turn at a glance.
+/// Strips the leading whitespace/newlines that `_withTiming` inserts
+/// before its "— Xs" footer so we can print just the footer when the
+/// body has already been streamed to stdout.
+String _trailingFooter(String suffix) => suffix.trim();
+
+String _briefArgs(IMap<String, String> args) {
+  if (args.isEmpty) {
+    return "";
+  }
+  final entries = args.entries.take(2).map((e) {
+    final v = e.value.length > 40
+        ? "${e.value.substring(0, 39)}…"
+        : e.value;
+    return "${e.key}=$v";
+  });
+  return entries.join(", ");
+}
+
 String _withTiming(
   String text,
   Duration elapsed,
