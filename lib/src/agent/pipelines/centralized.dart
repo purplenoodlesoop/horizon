@@ -5,6 +5,7 @@ import "package:horizon/src/agent/pipeline.dart";
 import "package:horizon/src/agent/system_prompt.dart";
 import "package:horizon/src/capability/capability.dart";
 import "package:horizon/src/config/config.dart";
+import "package:horizon/src/config/env_store.dart";
 import "package:horizon/src/harness/turn_store.dart";
 import "package:horizon/src/llm/client.dart";
 import "package:horizon/src/tool/allowlist.dart";
@@ -36,6 +37,7 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
     required IList<Capability> capabilities,
     required IList<AllowlistedTool> allowlist,
     required HorizonConfig config,
+    required EnvStore envStore,
     required IList<Event> recentEvents,
     required Logger logger,
     bool heartbeatMode = false,
@@ -61,13 +63,11 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
           final userMessage = _buildUserMessage(summary, event.content);
 
           final agent = RunAgentLlm(
-            fireworksToken: config.fireworksToken,
+            envStore: envStore,
             systemPrompt: systemPrompt,
             userMessage: userMessage,
             allowlist: allowlist,
             vaultPath: config.vaultPath,
-            telegramToken: config.telegramToken,
-            tavilyToken: config.tavilyToken,
             logger: logger,
             agentId: _agentId,
           );

@@ -6,6 +6,8 @@
   makeWrapper,
   curl,
   jq,
+  whisper-cpp,
+  ffmpeg,
 }:
 let
   # buildDartApplication needs pubspec.lock as parsed Nix data.
@@ -38,25 +40,28 @@ buildDartApplication {
   postInstall = ''
     # dartInstallHook puts the compiled binary at $out/horizon (not
     # $out/bin/horizon). Move it where nix run / meta.mainProgram
-    # expects it, and stage the runtime data into $out/share/horizon.
+    # expects it, and stage the templates bundle into
+    # $out/share/horizon. The allowlist now lives under
+    # templates/_horizon/system/allowlist.yaml — bootstrapped into
+    # the vault on first run, then hot-reloaded from there.
     mkdir -p $out/bin $out/share/horizon
     mv $out/horizon $out/bin/horizon
-    cp -r config $out/share/horizon/config
     cp -r templates $out/share/horizon/templates
   '';
 
   # Wrap during fixupPhase, after install/chmod is settled. Sets
-  # env-var defaults so the binary finds its templates and tool
-  # allowlist regardless of cwd, and ensures curl/jq are on PATH for
-  # the bash tool templates that need them.
+  # HORIZON_TEMPLATES so the binary finds the bundled bootstrap
+  # source regardless of cwd, and puts curl/jq/whisper-cpp/ffmpeg on
+  # PATH for the bash tool templates that need them.
   postFixup = ''
     wrapProgram $out/bin/horizon \
-      --set-default HORIZON_ALLOWLIST $out/share/horizon/config/allowlist.yaml \
       --set-default HORIZON_TEMPLATES $out/share/horizon/templates \
       --prefix PATH : ${
         lib.makeBinPath [
           curl
           jq
+          whisper-cpp
+          ffmpeg
         ]
       }
   '';

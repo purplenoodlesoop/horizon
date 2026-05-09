@@ -14,15 +14,13 @@ T _$identity<T>(T value) => value;
 
 /// @nodoc
 mixin _$HorizonConfig {
-  String get telegramToken;
-  String get telegramUsername;
-  String get fireworksToken;
-  String get tavilyToken;
   String get vaultPath;
   Mode<()> get mode;
-  String get allowlistPath;
+  String get allowlistOverride;
   String get templatesPath;
   Duration get heartbeatInterval;
+  bool get streamUi;
+  String get envFilePath;
 
   /// Create a copy of HorizonConfig
   /// with the given fields replaced by the non-null parameter values.
@@ -37,41 +35,35 @@ mixin _$HorizonConfig {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is HorizonConfig &&
-            (identical(other.telegramToken, telegramToken) ||
-                other.telegramToken == telegramToken) &&
-            (identical(other.telegramUsername, telegramUsername) ||
-                other.telegramUsername == telegramUsername) &&
-            (identical(other.fireworksToken, fireworksToken) ||
-                other.fireworksToken == fireworksToken) &&
-            (identical(other.tavilyToken, tavilyToken) ||
-                other.tavilyToken == tavilyToken) &&
             (identical(other.vaultPath, vaultPath) ||
                 other.vaultPath == vaultPath) &&
             (identical(other.mode, mode) || other.mode == mode) &&
-            (identical(other.allowlistPath, allowlistPath) ||
-                other.allowlistPath == allowlistPath) &&
+            (identical(other.allowlistOverride, allowlistOverride) ||
+                other.allowlistOverride == allowlistOverride) &&
             (identical(other.templatesPath, templatesPath) ||
                 other.templatesPath == templatesPath) &&
             (identical(other.heartbeatInterval, heartbeatInterval) ||
-                other.heartbeatInterval == heartbeatInterval));
+                other.heartbeatInterval == heartbeatInterval) &&
+            (identical(other.streamUi, streamUi) ||
+                other.streamUi == streamUi) &&
+            (identical(other.envFilePath, envFilePath) ||
+                other.envFilePath == envFilePath));
   }
 
   @override
   int get hashCode => Object.hash(
       runtimeType,
-      telegramToken,
-      telegramUsername,
-      fireworksToken,
-      tavilyToken,
       vaultPath,
       mode,
-      allowlistPath,
+      allowlistOverride,
       templatesPath,
-      heartbeatInterval);
+      heartbeatInterval,
+      streamUi,
+      envFilePath);
 
   @override
   String toString() {
-    return 'HorizonConfig(telegramToken: $telegramToken, telegramUsername: $telegramUsername, fireworksToken: $fireworksToken, tavilyToken: $tavilyToken, vaultPath: $vaultPath, mode: $mode, allowlistPath: $allowlistPath, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval)';
+    return 'HorizonConfig(vaultPath: $vaultPath, mode: $mode, allowlistOverride: $allowlistOverride, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval, streamUi: $streamUi, envFilePath: $envFilePath)';
   }
 }
 
@@ -82,15 +74,13 @@ abstract mixin class $HorizonConfigCopyWith<$Res> {
       _$HorizonConfigCopyWithImpl;
   @useResult
   $Res call(
-      {String telegramToken,
-      String telegramUsername,
-      String fireworksToken,
-      String tavilyToken,
-      String vaultPath,
+      {String vaultPath,
       Mode<()> mode,
-      String allowlistPath,
+      String allowlistOverride,
       String templatesPath,
-      Duration heartbeatInterval});
+      Duration heartbeatInterval,
+      bool streamUi,
+      String envFilePath});
 }
 
 /// @nodoc
@@ -106,33 +96,15 @@ class _$HorizonConfigCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   @override
   $Res call({
-    Object? telegramToken = null,
-    Object? telegramUsername = null,
-    Object? fireworksToken = null,
-    Object? tavilyToken = null,
     Object? vaultPath = null,
     Object? mode = null,
-    Object? allowlistPath = null,
+    Object? allowlistOverride = null,
     Object? templatesPath = null,
     Object? heartbeatInterval = null,
+    Object? streamUi = null,
+    Object? envFilePath = null,
   }) {
     return _then(_self.copyWith(
-      telegramToken: null == telegramToken
-          ? _self.telegramToken
-          : telegramToken // ignore: cast_nullable_to_non_nullable
-              as String,
-      telegramUsername: null == telegramUsername
-          ? _self.telegramUsername
-          : telegramUsername // ignore: cast_nullable_to_non_nullable
-              as String,
-      fireworksToken: null == fireworksToken
-          ? _self.fireworksToken
-          : fireworksToken // ignore: cast_nullable_to_non_nullable
-              as String,
-      tavilyToken: null == tavilyToken
-          ? _self.tavilyToken
-          : tavilyToken // ignore: cast_nullable_to_non_nullable
-              as String,
       vaultPath: null == vaultPath
           ? _self.vaultPath
           : vaultPath // ignore: cast_nullable_to_non_nullable
@@ -141,9 +113,9 @@ class _$HorizonConfigCopyWithImpl<$Res>
           ? _self.mode
           : mode // ignore: cast_nullable_to_non_nullable
               as Mode<()>,
-      allowlistPath: null == allowlistPath
-          ? _self.allowlistPath
-          : allowlistPath // ignore: cast_nullable_to_non_nullable
+      allowlistOverride: null == allowlistOverride
+          ? _self.allowlistOverride
+          : allowlistOverride // ignore: cast_nullable_to_non_nullable
               as String,
       templatesPath: null == templatesPath
           ? _self.templatesPath
@@ -153,6 +125,14 @@ class _$HorizonConfigCopyWithImpl<$Res>
           ? _self.heartbeatInterval
           : heartbeatInterval // ignore: cast_nullable_to_non_nullable
               as Duration,
+      streamUi: null == streamUi
+          ? _self.streamUi
+          : streamUi // ignore: cast_nullable_to_non_nullable
+              as bool,
+      envFilePath: null == envFilePath
+          ? _self.envFilePath
+          : envFilePath // ignore: cast_nullable_to_non_nullable
+              as String,
     ));
   }
 }
@@ -251,15 +231,13 @@ extension HorizonConfigPatterns on HorizonConfig {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
     TResult Function(
-            String telegramToken,
-            String telegramUsername,
-            String fireworksToken,
-            String tavilyToken,
             String vaultPath,
             Mode<()> mode,
-            String allowlistPath,
+            String allowlistOverride,
             String templatesPath,
-            Duration heartbeatInterval)?
+            Duration heartbeatInterval,
+            bool streamUi,
+            String envFilePath)?
         $default, {
     required TResult orElse(),
   }) {
@@ -267,15 +245,13 @@ extension HorizonConfigPatterns on HorizonConfig {
     switch (_that) {
       case _HorizonConfig() when $default != null:
         return $default(
-            _that.telegramToken,
-            _that.telegramUsername,
-            _that.fireworksToken,
-            _that.tavilyToken,
             _that.vaultPath,
             _that.mode,
-            _that.allowlistPath,
+            _that.allowlistOverride,
             _that.templatesPath,
-            _that.heartbeatInterval);
+            _that.heartbeatInterval,
+            _that.streamUi,
+            _that.envFilePath);
       case _:
         return orElse();
     }
@@ -297,30 +273,26 @@ extension HorizonConfigPatterns on HorizonConfig {
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
     TResult Function(
-            String telegramToken,
-            String telegramUsername,
-            String fireworksToken,
-            String tavilyToken,
             String vaultPath,
             Mode<()> mode,
-            String allowlistPath,
+            String allowlistOverride,
             String templatesPath,
-            Duration heartbeatInterval)
+            Duration heartbeatInterval,
+            bool streamUi,
+            String envFilePath)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _HorizonConfig():
         return $default(
-            _that.telegramToken,
-            _that.telegramUsername,
-            _that.fireworksToken,
-            _that.tavilyToken,
             _that.vaultPath,
             _that.mode,
-            _that.allowlistPath,
+            _that.allowlistOverride,
             _that.templatesPath,
-            _that.heartbeatInterval);
+            _that.heartbeatInterval,
+            _that.streamUi,
+            _that.envFilePath);
       case _:
         throw StateError('Unexpected subclass');
     }
@@ -341,30 +313,26 @@ extension HorizonConfigPatterns on HorizonConfig {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
     TResult? Function(
-            String telegramToken,
-            String telegramUsername,
-            String fireworksToken,
-            String tavilyToken,
             String vaultPath,
             Mode<()> mode,
-            String allowlistPath,
+            String allowlistOverride,
             String templatesPath,
-            Duration heartbeatInterval)?
+            Duration heartbeatInterval,
+            bool streamUi,
+            String envFilePath)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _HorizonConfig() when $default != null:
         return $default(
-            _that.telegramToken,
-            _that.telegramUsername,
-            _that.fireworksToken,
-            _that.tavilyToken,
             _that.vaultPath,
             _that.mode,
-            _that.allowlistPath,
+            _that.allowlistOverride,
             _that.templatesPath,
-            _that.heartbeatInterval);
+            _that.heartbeatInterval,
+            _that.streamUi,
+            _that.envFilePath);
       case _:
         return null;
     }
@@ -375,34 +343,28 @@ extension HorizonConfigPatterns on HorizonConfig {
 
 class _HorizonConfig implements HorizonConfig {
   const _HorizonConfig(
-      {required this.telegramToken,
-      required this.telegramUsername,
-      required this.fireworksToken,
-      required this.tavilyToken,
-      required this.vaultPath,
+      {required this.vaultPath,
       required this.mode,
-      required this.allowlistPath,
+      required this.allowlistOverride,
       required this.templatesPath,
-      required this.heartbeatInterval});
+      required this.heartbeatInterval,
+      required this.streamUi,
+      required this.envFilePath});
 
-  @override
-  final String telegramToken;
-  @override
-  final String telegramUsername;
-  @override
-  final String fireworksToken;
-  @override
-  final String tavilyToken;
   @override
   final String vaultPath;
   @override
   final Mode<()> mode;
   @override
-  final String allowlistPath;
+  final String allowlistOverride;
   @override
   final String templatesPath;
   @override
   final Duration heartbeatInterval;
+  @override
+  final bool streamUi;
+  @override
+  final String envFilePath;
 
   /// Create a copy of HorizonConfig
   /// with the given fields replaced by the non-null parameter values.
@@ -417,41 +379,35 @@ class _HorizonConfig implements HorizonConfig {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is _HorizonConfig &&
-            (identical(other.telegramToken, telegramToken) ||
-                other.telegramToken == telegramToken) &&
-            (identical(other.telegramUsername, telegramUsername) ||
-                other.telegramUsername == telegramUsername) &&
-            (identical(other.fireworksToken, fireworksToken) ||
-                other.fireworksToken == fireworksToken) &&
-            (identical(other.tavilyToken, tavilyToken) ||
-                other.tavilyToken == tavilyToken) &&
             (identical(other.vaultPath, vaultPath) ||
                 other.vaultPath == vaultPath) &&
             (identical(other.mode, mode) || other.mode == mode) &&
-            (identical(other.allowlistPath, allowlistPath) ||
-                other.allowlistPath == allowlistPath) &&
+            (identical(other.allowlistOverride, allowlistOverride) ||
+                other.allowlistOverride == allowlistOverride) &&
             (identical(other.templatesPath, templatesPath) ||
                 other.templatesPath == templatesPath) &&
             (identical(other.heartbeatInterval, heartbeatInterval) ||
-                other.heartbeatInterval == heartbeatInterval));
+                other.heartbeatInterval == heartbeatInterval) &&
+            (identical(other.streamUi, streamUi) ||
+                other.streamUi == streamUi) &&
+            (identical(other.envFilePath, envFilePath) ||
+                other.envFilePath == envFilePath));
   }
 
   @override
   int get hashCode => Object.hash(
       runtimeType,
-      telegramToken,
-      telegramUsername,
-      fireworksToken,
-      tavilyToken,
       vaultPath,
       mode,
-      allowlistPath,
+      allowlistOverride,
       templatesPath,
-      heartbeatInterval);
+      heartbeatInterval,
+      streamUi,
+      envFilePath);
 
   @override
   String toString() {
-    return 'HorizonConfig(telegramToken: $telegramToken, telegramUsername: $telegramUsername, fireworksToken: $fireworksToken, tavilyToken: $tavilyToken, vaultPath: $vaultPath, mode: $mode, allowlistPath: $allowlistPath, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval)';
+    return 'HorizonConfig(vaultPath: $vaultPath, mode: $mode, allowlistOverride: $allowlistOverride, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval, streamUi: $streamUi, envFilePath: $envFilePath)';
   }
 }
 
@@ -464,15 +420,13 @@ abstract mixin class _$HorizonConfigCopyWith<$Res>
   @override
   @useResult
   $Res call(
-      {String telegramToken,
-      String telegramUsername,
-      String fireworksToken,
-      String tavilyToken,
-      String vaultPath,
+      {String vaultPath,
       Mode<()> mode,
-      String allowlistPath,
+      String allowlistOverride,
       String templatesPath,
-      Duration heartbeatInterval});
+      Duration heartbeatInterval,
+      bool streamUi,
+      String envFilePath});
 }
 
 /// @nodoc
@@ -488,33 +442,15 @@ class __$HorizonConfigCopyWithImpl<$Res>
   @override
   @pragma('vm:prefer-inline')
   $Res call({
-    Object? telegramToken = null,
-    Object? telegramUsername = null,
-    Object? fireworksToken = null,
-    Object? tavilyToken = null,
     Object? vaultPath = null,
     Object? mode = null,
-    Object? allowlistPath = null,
+    Object? allowlistOverride = null,
     Object? templatesPath = null,
     Object? heartbeatInterval = null,
+    Object? streamUi = null,
+    Object? envFilePath = null,
   }) {
     return _then(_HorizonConfig(
-      telegramToken: null == telegramToken
-          ? _self.telegramToken
-          : telegramToken // ignore: cast_nullable_to_non_nullable
-              as String,
-      telegramUsername: null == telegramUsername
-          ? _self.telegramUsername
-          : telegramUsername // ignore: cast_nullable_to_non_nullable
-              as String,
-      fireworksToken: null == fireworksToken
-          ? _self.fireworksToken
-          : fireworksToken // ignore: cast_nullable_to_non_nullable
-              as String,
-      tavilyToken: null == tavilyToken
-          ? _self.tavilyToken
-          : tavilyToken // ignore: cast_nullable_to_non_nullable
-              as String,
       vaultPath: null == vaultPath
           ? _self.vaultPath
           : vaultPath // ignore: cast_nullable_to_non_nullable
@@ -523,9 +459,9 @@ class __$HorizonConfigCopyWithImpl<$Res>
           ? _self.mode
           : mode // ignore: cast_nullable_to_non_nullable
               as Mode<()>,
-      allowlistPath: null == allowlistPath
-          ? _self.allowlistPath
-          : allowlistPath // ignore: cast_nullable_to_non_nullable
+      allowlistOverride: null == allowlistOverride
+          ? _self.allowlistOverride
+          : allowlistOverride // ignore: cast_nullable_to_non_nullable
               as String,
       templatesPath: null == templatesPath
           ? _self.templatesPath
@@ -535,6 +471,14 @@ class __$HorizonConfigCopyWithImpl<$Res>
           ? _self.heartbeatInterval
           : heartbeatInterval // ignore: cast_nullable_to_non_nullable
               as Duration,
+      streamUi: null == streamUi
+          ? _self.streamUi
+          : streamUi // ignore: cast_nullable_to_non_nullable
+              as bool,
+      envFilePath: null == envFilePath
+          ? _self.envFilePath
+          : envFilePath // ignore: cast_nullable_to_non_nullable
+              as String,
     ));
   }
 }

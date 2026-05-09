@@ -43,7 +43,7 @@ Three properties make this different from the other personal-assistant framework
 
 1. **Vault-resident behavior.** Capabilities live as markdown files inside the vault, alongside your notes. Edit a capability in Obsidian and the next event uses the new behavior — no restart.
 2. **Signal-driven proactivity.** The heartbeat does nothing by default. Capabilities can declare a `schedule:` field; the harness fires the LLM only when at least one capability is due. Empty ticks cost zero tokens.
-3. **Bash allowlist as the tool primitive.** New tools are YAML edits in `config/allowlist.yaml`. No MCP, no per-tool Dart code, no server lifecycle. Curl, jq, and the file system are the toolkit.
+3. **Bash allowlist as the tool primitive.** New tools are YAML edits in `<vault>/_horizon/system/allowlist.yaml` — vault-resident, hot-reloaded on every event, editable from Obsidian Mobile. No MCP, no per-tool Dart code, no server lifecycle. Curl, jq, and the file system are the toolkit.
 
 ---
 
@@ -59,7 +59,7 @@ Three properties make this different from the other personal-assistant framework
 nix run github:purplenoodlesoop/horizon
 ```
 
-The flake bundles the templates and the tool allowlist into the package, so the binary works from any directory. On first run, an empty vault gets bootstrapped with the default capability set.
+The flake bundles the templates (capabilities, system prompts, default tool allowlist) into the package, so the binary works from any directory. On first run, an empty vault is bootstrapped with the default capability set and `_horizon/system/allowlist.yaml`. After that, you edit tools and capabilities in Obsidian and the next event picks up the changes — no restart, no redeploy.
 
 ---
 
@@ -68,17 +68,17 @@ The flake bundles the templates and the tool allowlist into the package, so the 
 | Flag | Env var | Default | Required | Notes |
 |---|---|---|---|---|
 | `--telegram-token` | `TELEGRAM_TOKEN` | — | yes | Bot token from @BotFather |
-| `--telegram-username` | `TELEGRAM_USERNAME` | — | strongly recommended | Single Telegram user the bot will accept messages from and send to. Without `@`. Empty = no filter (warns at startup) |
+| `--telegram-username` | `TELEGRAM_USERNAME` | — | **required for any inbound traffic** | Single Telegram user the bot will accept messages from and send to. Without `@`. Empty = fail-closed (all inbound dropped, startup warns) |
 | `--fireworks-token` | `FIREWORKS_TOKEN` | — | yes | Fireworks API key for Kimi K2.5 |
 | `--tavily-token` | `TAVILY_TOKEN` | — | optional | Enables `web_search`. Without it, the tool fails when called |
 | `--vault` | — | `vault` | no | Path to the Obsidian vault |
-| `--allowlist` | `HORIZON_ALLOWLIST` | `config/allowlist.yaml` | no | Tool definitions YAML |
+| `--allowlist` | `HORIZON_ALLOWLIST` | `<vault>/_horizon/system/allowlist.yaml` | no | Tool definitions YAML; override only — the harness reads from the vault by default and reloads per event |
 | `--templates` | `HORIZON_TEMPLATES` | `templates` | no | Bootstrap source for `_horizon/` |
 | `--heartbeat` | — | `300` | no | Heartbeat interval in seconds |
 | `--mode` | — | `human` | no | `human` for interactive, `agent` for JSON output |
 | `--env-file` | — | `.env` | no | KEY=VALUE file loaded before flag/env resolution |
 
-The Nix package sets `HORIZON_ALLOWLIST` and `HORIZON_TEMPLATES` to install-prefix paths via a wrapper, so `nix run` works from any directory.
+The Nix package sets `HORIZON_TEMPLATES` to the install-prefix path via a wrapper, so `nix run` works from any directory. The first run bootstraps `_horizon/system/allowlist.yaml` from that template into your vault; subsequent edits live in the vault.
 
 ---
 
@@ -224,7 +224,7 @@ Default capabilities ship without `schedule:` — proactive behavior is opt-in.
 
 ## Tools
 
-Tools are bash command templates in `config/allowlist.yaml`. The harness renders a template with shell-escaped arguments, validates, runs through `bash -c`, and returns stdout/stderr to the orchestrator.
+Tools are bash command templates in `<vault>/_horizon/system/allowlist.yaml`. The harness renders a template with shell-escaped arguments, validates, runs through `bash -c`, and returns stdout/stderr to the orchestrator. The file is read on every event, so edits in Obsidian Mobile take effect on the next message — no restart needed. The bundled default allowlist is shipped in `templates/_horizon/system/allowlist.yaml` and copied into your vault on first run.
 
 ### Vault I/O
 
@@ -259,7 +259,7 @@ Tools are bash command templates in `config/allowlist.yaml`. The harness renders
 
 ### Adding a tool
 
-Append to `config/allowlist.yaml`:
+Append to `<vault>/_horizon/system/allowlist.yaml` (in Obsidian or via your editor of choice):
 
 ```yaml
   - name: weather
@@ -271,7 +271,7 @@ Append to `config/allowlist.yaml`:
     command: "curl -sS 'https://wttr.in/'{location}'?format=3'"
 ```
 
-Restart the harness. The new tool surfaces in the system prompt automatically. Secret credentials (API keys) should be passed via env vars (added to `executor.dart`'s `Process.run` env) and referenced as `$VAR_NAME` in the template — never substituted via `{var}`, since substitution puts them in the rendered command string.
+No restart needed — the next event picks up the new tool. Secret credentials (API keys) should be passed via env vars (added to `executor.dart`'s `Process.run` env, hot-reloaded from `.env`) and referenced as `$VAR_NAME` in the template — never substituted via `{var}`, since substitution puts them in the rendered command string.
 
 Custom param types currently recognized:
 
@@ -295,13 +295,13 @@ The Telegram bot is **single-user** by design. Set `TELEGRAM_USERNAME=<your_user
 
 Net effect: you must DM the bot at least once to "register" your chat_id; afterward, capabilities can push proactively to that chat. The bot will never accept or send outside that pair.
 
-If `TELEGRAM_USERNAME` is empty, the harness logs a startup warning and accepts everything — useful for local testing, never for production.
+If `TELEGRAM_USERNAME` is empty, the harness logs a startup warning and **drops every inbound message** (fail-closed). The bot is single-user by design; an unset username is treated as a misconfiguration, never as "allow everyone."
 
 ---
 
 ## Security model
 
-- **Tool allowlist.** Only commands declared in `config/allowlist.yaml` execute. Unknown tool names return an error before bash sees anything.
+- **Tool allowlist.** Only commands declared in `<vault>/_horizon/system/allowlist.yaml` execute. Unknown tool names return an error before bash sees anything. The vault is single-user-write by virtue of the device sync model (your Obsidian vault, your phone), so vault-resident allowlist edits sit inside the same trust boundary as capability prose.
 - **Path traversal.** `path`-typed parameters are checked to stay under `<vault>/`; any `..` or absolute path is refused.
 - **Shell escaping.** Every parameter value is wrapped in single quotes with embedded single quotes escaped. The orchestrator cannot inject shell metacharacters by crafting a parameter.
 - **No pipe-to-interpreter.** Rendered commands are scanned for `| sh`, `| bash`, `| python`, etc., and refused at validation time.
@@ -386,10 +386,9 @@ horizon/
 │   │   ├── executor.dart         # render + validate + bash
 │   │   └── security.dart         # path/command validation + chat_id allowlist
 │   └── vault/summary.dart        # event summary formatter
-├── config/allowlist.yaml         # tool definitions
-├── templates/_horizon/           # bootstrap content
+├── templates/_horizon/           # bootstrap content (copied into the vault on first run)
 │   ├── capabilities/             # default capability bundle
-│   └── system/                   # standing + heartbeat-addendum prompts
+│   └── system/                   # standing prompt + heartbeat-addendum + default allowlist.yaml
 ├── flake.nix                     # Nix package + app
 └── nix/horizon.nix               # derivation (dart compile + wrap)
 ```

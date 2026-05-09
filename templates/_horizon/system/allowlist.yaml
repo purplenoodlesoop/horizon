@@ -61,8 +61,8 @@ tools:
     command: "rm -f {vault_path}/{path}"
 
   - name: now
-    description: Returns the current UTC date and time in ISO 8601 format (e.g. 2026-04-25T14:30:00Z). Use when you need to know what time it is now, what today's date is, or to compute a date relative to now.
-    command: "date -u +%Y-%m-%dT%H:%M:%SZ"
+    description: "Returns the current UTC datetime, weekday name, ISO week, and ISO day-of-week (1=Mon..7=Sun). Format: `YYYY-MM-DDTHH:MM:SSZ Weekday (week NN, day N)` (e.g. `2026-05-09T18:23:11Z Saturday (week 19, day 6)`). Use whenever you need to know the time, the date, what day of the week it is, or to compute a date relative to now. Always reach for this rather than guessing the weekday from the date."
+    command: "date -u +'%Y-%m-%dT%H:%M:%SZ %A (week %V, day %u)'"
 
   - name: list_files_glob
     description: List vault files matching a glob pattern. Two modes - if the pattern contains a slash, it's matched against the path relative to vault root (e.g. "todos/*.md" finds md files directly under todos/, "_horizon/turns/*.md" finds turn records). If the pattern has no slash, it's matched against the basename anywhere in the vault recursively (e.g. "*.json" finds all JSON files). Note - "*" never crosses "/", and "**" is NOT supported - use a basename-only pattern for "anywhere recursive".
@@ -95,6 +95,52 @@ tools:
         type: string
         description: Search query in plain English
     command: "jq -n --arg key \"$TAVILY_TOKEN\" --arg q {query} '{api_key:$key,query:$q,max_results:5,search_depth:\"basic\"}' | curl -sS --max-time 30 -X POST 'https://api.tavily.com/search' -H 'Content-Type: application/json' -d @-"
+
+  - name: schedule_reminder
+    description: "Schedule a one-shot reminder. Fires once at fire_at, then auto-deletes. Use when the user says 'remind me at X', 'in 30 minutes', 'tomorrow at 9'. For recurring jobs (every weekday, every Friday at noon), use schedule_cron instead."
+    parameters:
+      id:
+        type: string
+        description: "Kebab-case unique identifier, e.g. 'call-mom-friday' or 'check-deploy-tonight'. Should be descriptive — the user reads it in /list-schedules."
+      fire_at:
+        type: string
+        description: "Either an ISO-8601 UTC timestamp ('2026-05-15T14:00Z') OR a relative duration ('30m', '2h', '1d', '1w'). Always include the trailing 'Z' on absolute timestamps so it's unambiguously UTC."
+      prompt:
+        type: string
+        description: "The user-message text the orchestrator will receive when the reminder fires. Phrase it as if the user just sent the message — e.g. 'Time to call mom — tell me what to say.'"
+      deliver:
+        type: string
+        description: "Delivery target: 'telegram(<chat_id>)' (most common — find chat_id in _horizon/messages/ frontmatter), 'none' (silent), or 'origin' (only useful if the schedule was created via tool with a recorded origin chat)."
+    command: "mkdir -p {vault_path}/_horizon/schedules && { printf -- '---\\nid: %s\\nschedule: %s\\ndeliver: %s\\ncreated_by: agent\\nexpires_after: 1\\nprompt: |\\n' {id} {fire_at} {deliver} && printf '%s' {prompt} | sed 's/^/  /'; printf '\\n---\\n'; } > {vault_path}/_horizon/schedules/{id}.md && echo Scheduled {id} for {fire_at}"
+
+  - name: schedule_cron
+    description: "Schedule a recurring job using a 5-field cron expression. Use for 'every morning at 9', 'every weekday', 'every Sunday'. For one-shot reminders, use schedule_reminder."
+    parameters:
+      id:
+        type: string
+        description: "Kebab-case unique identifier, e.g. 'morning-standup' or 'weekly-review'."
+      cron:
+        type: string
+        description: "5-field cron expression: 'minute hour day-of-month month day-of-week'. All UTC. Examples: '0 9 * * 1-5' (weekdays 09:00 UTC), '0 17 * * 5' (Friday 17:00), '*/15 * * * *' is NOT supported (no step values yet) — use explicit list '0,15,30,45 * * * *'."
+      prompt:
+        type: string
+        description: "The user-message text the orchestrator will receive on each fire."
+      deliver:
+        type: string
+        description: "Delivery target: 'telegram(<chat_id>)', 'none', or 'origin'."
+    command: "mkdir -p {vault_path}/_horizon/schedules && { printf -- '---\\nid: %s\\nschedule: %s\\ndeliver: %s\\ncreated_by: agent\\nprompt: |\\n' {id} {cron} {deliver} && printf '%s' {prompt} | sed 's/^/  /'; printf '\\n---\\n'; } > {vault_path}/_horizon/schedules/{id}.md && echo Scheduled cron {id}"
+
+  - name: cancel_schedule
+    description: "Delete a schedule entry by id. Use when the user says 'cancel that reminder' or you decide a previously-set schedule is no longer needed. Idempotent — deleting a non-existent schedule is a no-op."
+    parameters:
+      id:
+        type: string
+        description: "Schedule id (the same id used when creating it)."
+    command: "rm -f {vault_path}/_horizon/schedules/{id}.md {vault_path}/_horizon/schedules/.lastfire/{id} {vault_path}/_horizon/schedules/.firecount/{id} && echo Cancelled {id}"
+
+  - name: list_schedules
+    description: "List active schedule entries. Returns id + schedule field for each. Use when the user asks 'what reminders do I have' or 'what's scheduled'."
+    command: "find {vault_path}/_horizon/schedules -maxdepth 1 -name '*.md' -type f 2>/dev/null | sort | while read f; do id=$(basename \"$f\" .md); sched=$(awk '/^schedule:/ {sub(/^schedule: */, \"\"); print; exit}' \"$f\"); echo \"$id  $sched\"; done"
 
   - name: send_telegram
     description: Send a message proactively to a Telegram chat. Use when something the user should know about happens outside an active conversation - a scheduled reminder firing, a pattern noticed, a deadline approaching. To find a chat_id, look at recent inbound messages in _horizon/messages/ - their frontmatter has chat_id when channel is telegram. The harness rejects any chat_id that has not previously sent us an accepted message. Do not send without a real reason; the user will lose trust if you spam.

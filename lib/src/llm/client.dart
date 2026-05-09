@@ -4,6 +4,7 @@ import "dart:convert";
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
 import "package:horizon/src/agent/agent_event.dart";
+import "package:horizon/src/config/env_store.dart";
 import "package:horizon/src/tool/allowlist.dart";
 import "package:horizon/src/tool/executor.dart";
 import "package:mark/mark.dart";
@@ -50,18 +51,19 @@ Tool _buildTool(AllowlistedTool tool) => Tool.function(
 
 class RunAgentLlm extends StreamFx<AgentEvent> {
   RunAgentLlm({
-    required String fireworksToken,
+    required EnvStore envStore,
     required String systemPrompt,
     required String userMessage,
     required IList<AllowlistedTool> allowlist,
     required String vaultPath,
-    required String telegramToken,
-    required String tavilyToken,
     required Logger logger,
     required String agentId,
   }) : super(() async* {
+          // Snapshot fireworks token at request start. If it rotates
+          // mid-turn the in-flight client keeps using the old one;
+          // the next event's pipeline picks up the new value.
           final client = OpenAIClient.withApiKey(
-            fireworksToken,
+            envStore.fireworksToken,
             baseUrl: _fireworksBaseUrl,
           );
           final tools = allowlist.map(_buildTool).toList();
@@ -76,8 +78,7 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
               tools: tools,
               allowlist: allowlist,
               vaultPath: vaultPath,
-              telegramToken: telegramToken,
-              tavilyToken: tavilyToken,
+              envStore: envStore,
               logger: logger,
               agentId: agentId,
             );
@@ -216,8 +217,7 @@ Stream<AgentEvent> _runLoop({
   required List<Tool> tools,
   required IList<AllowlistedTool> allowlist,
   required String vaultPath,
-  required String telegramToken,
-  required String tavilyToken,
+  required EnvStore envStore,
   required Logger logger,
   required String agentId,
 }) async* {
@@ -345,8 +345,7 @@ Stream<AgentEvent> _runLoop({
             toolName: toolCalls[i].function.name,
             toolArgs: parsedArgs[i],
             vaultPath: vaultPath,
-            telegramToken: telegramToken,
-            tavilyToken: tavilyToken,
+            envStore: envStore,
           ),
       ]);
 

@@ -21,6 +21,7 @@ String _messagePath(String vaultPath, Event event) {
 String? _telegramChatId(Channel<Object?> channel) => switch (channel) {
   TelegramChannel(:final value) => value.chatId,
   CliChannel() => null,
+  ScheduleChannel() => null,
 };
 
 String _renderInbound(Event event) {

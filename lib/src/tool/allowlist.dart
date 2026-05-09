@@ -83,3 +83,29 @@ class LoadAllowlist extends Fx<IList<AllowlistedTool>> {
         return rawTools.map(_parseTool).toIList();
       });
 }
+
+/// Resolves which allowlist file to read on a given event.
+///
+/// Resolution order:
+///   1. Explicit override (`--allowlist` flag or `HORIZON_ALLOWLIST` env)
+///   2. Vault-resident `<vault>/_horizon/system/allowlist.yaml`
+///   3. Bundled template `<templates>/_horizon/system/allowlist.yaml`
+///
+/// (1) is the dev/testing escape hatch — once set, the harness ignores
+/// the vault. (2) is the live edit path — Obsidian edits propagate on
+/// the next event. (3) is what BootstrapVault copies into (2) on first
+/// run, and what's used until the bootstrap completes.
+String resolveAllowlistPath({
+  required String vaultPath,
+  required String templatesPath,
+  required String override,
+}) {
+  if (override.isNotEmpty) {
+    return override;
+  }
+  final vaultFile = "$vaultPath/_horizon/system/allowlist.yaml";
+  if (File(vaultFile).existsSync()) {
+    return vaultFile;
+  }
+  return "$templatesPath/_horizon/system/allowlist.yaml";
+}

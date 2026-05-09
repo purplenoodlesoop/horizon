@@ -21,6 +21,10 @@ class SendReply extends Fx<void> {
                 chatId: value.chatId,
                 text: text,
               );
+            case ScheduleChannel():
+              // Schedule events route their reply via the harness's
+              // deliver-tag handling, not the per-event channel.
+              break;
           }
         });
 }
@@ -47,6 +51,8 @@ class SendChatActionTyping extends Fx<void> {
                 // Best-effort indicator; never let this fail the
                 // pipeline.
               }
+            case ScheduleChannel():
+              break;
           }
         });
 }
@@ -406,6 +412,14 @@ String _briefForTool(String name, IMap<String, String> args) {
       return "Searching the web for ${a("query") ?? "..."}";
     case "send_telegram":
       return "Sending message";
+    case "schedule_reminder":
+      return "Setting reminder ${a("id") ?? ""}";
+    case "schedule_cron":
+      return "Setting cron ${a("id") ?? ""}";
+    case "cancel_schedule":
+      return "Cancelling ${a("id") ?? "schedule"}";
+    case "list_schedules":
+      return "Listing schedules";
     default:
       return "Running $name";
   }

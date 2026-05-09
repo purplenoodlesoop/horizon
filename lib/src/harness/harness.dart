@@ -12,14 +12,21 @@ import "package:horizon/src/capability/schedule.dart";
 import "package:horizon/src/channel/cli.dart";
 import "package:horizon/src/channel/reply.dart";
 import "package:horizon/src/channel/telegram.dart";
+import "package:horizon/src/channel/telegram_admin.dart";
 import "package:horizon/src/config/args.dart";
 import "package:horizon/src/config/config.dart";
+import "package:horizon/src/config/env_store.dart";
+import "package:horizon/src/config/env_watcher.dart";
+import "package:horizon/src/config/preferences.dart";
 import "package:horizon/src/event/event.dart";
 import "package:horizon/src/harness/bootstrap.dart";
 import "package:horizon/src/harness/console_logger.dart";
 import "package:horizon/src/harness/file_logger.dart";
 import "package:horizon/src/harness/message_store.dart";
+import "package:horizon/src/schedule/schedule.dart";
+import "package:horizon/src/schedule/scheduler.dart";
 import "package:horizon/src/tool/allowlist.dart";
+import "package:horizon/src/tool/executor.dart";
 import "package:mark/mark.dart";
 import "package:stream_transform/stream_transform.dart";
 
@@ -28,7 +35,9 @@ const _historyLimit = 100;
 class RunHarness extends Fx<void> {
   RunHarness(List<String> args)
     : super(() async {
-        final config = await ParseArgs(args);
+        final parsed = await ParseArgs(args);
+        final config = parsed.config;
+        final envStore = parsed.envStore;
         final timestamp = DateTime.now()
             .toIso8601String()
             .replaceAll(":", "-");
@@ -42,14 +51,18 @@ class RunHarness extends Fx<void> {
           ],
         );
         try {
-          await _run(config, logger);
+          await _run(config, envStore, logger);
         } finally {
           await logger.dispose();
         }
       });
 }
 
-Future<void> _run(HorizonConfig config, Logger logger) async {
+Future<void> _run(
+  HorizonConfig config,
+  EnvStore envStore,
+  Logger logger,
+) async {
   await BootstrapVault(
     vaultPath: config.vaultPath,
     templatesPath: config.templatesPath,
@@ -64,10 +77,18 @@ Future<void> _run(HorizonConfig config, Logger logger) async {
     logger: logger,
   );
 
-  logger.debug("Loading allowlist from ${config.allowlistPath}");
-
-  final allowlist = await LoadAllowlist(config.allowlistPath);
-  logger.debug("Loaded ${allowlist.length} tool(s)");
+  // Allowlist is resolved + reloaded per event so edits via Obsidian
+  // Mobile take effect on the next user message — same hot-reload
+  // discipline as capabilities. Startup just probes the resolved path
+  // to fail fast on a missing file.
+  final startupAllowlistPath = resolveAllowlistPath(
+    vaultPath: config.vaultPath,
+    templatesPath: config.templatesPath,
+    override: config.allowlistOverride,
+  );
+  logger.debug("Allowlist source: $startupAllowlistPath");
+  final startupAllowlist = await LoadAllowlist(startupAllowlistPath);
+  logger.debug("Loaded ${startupAllowlist.length} tool(s) at startup");
 
   final isAgent = config.mode is AgentMode;
   if (isAgent) {
@@ -79,40 +100,142 @@ Future<void> _run(HorizonConfig config, Logger logger) async {
     (_) => heartbeatEvent(),
   );
 
-  if (config.telegramUsername.isEmpty) {
+  if (envStore.telegramUsername.isEmpty) {
     logger.warning(
-      "TELEGRAM_USERNAME is not set — the bot will accept messages "
-      "from any user and send to any chat_id. Set it in .env or "
-      "via --telegram-username to lock the bot to a single user.",
+      "TELEGRAM_USERNAME is not set — Telegram inbound is FAIL-CLOSED: "
+      "all messages will be dropped, including yours. Set "
+      "TELEGRAM_USERNAME in .env (without `@`) or pass "
+      "--telegram-username to allow your account.",
     );
   }
 
-  final events = TelegramPoller(
-    botToken: config.telegramToken,
-    allowedUsername: config.telegramUsername,
-  ).merge(CliEvents()).merge(heartbeat);
+  // Telegram poller restart-on-rotation: the poller is constructed
+  // with the current TELEGRAM_TOKEN/USERNAME; if either changes (env
+  // file edited, .env reload picks it up), we cancel the current
+  // subscription and start a fresh poller. The downstream merge
+  // sees a single continuous stream via the controller.
+  final telegramOut = StreamController<Event>();
+  StreamSubscription<Event>? telegramSub;
+  void startPoller() {
+    final old = telegramSub;
+    if (old != null) {
+      unawaited(old.cancel());
+    }
+    if (envStore.telegramToken.isEmpty) {
+      logger.warning("Telegram poller idle: TELEGRAM_TOKEN is empty");
+      telegramSub = null;
+      return;
+    }
+    telegramSub = TelegramPoller(
+      botToken: envStore.telegramToken,
+      allowedUsername: envStore.telegramUsername,
+      vaultPath: config.vaultPath,
+      logger: logger,
+    ).listen(
+      telegramOut.add,
+      onError: (Object e, StackTrace st) =>
+          logger.error("Telegram poller error: $e", stackTrace: st),
+    );
+  }
+  startPoller();
+
+  // Live .env reload: file-watch in parallel with the event loop.
+  // On token rotation, restart the poller transparently.
+  // Fx is a LazyFuture: `unawaited(SomeFx)` would NOT trigger the
+  // body. Always `.asFuture()` for fire-and-forget — see
+  // `spec/lessons-from-live-use.md` §5.
+  unawaited(WatchEnvFile(
+    store: envStore,
+    logger: logger,
+    onReload: (diff) {
+      if (diff.affectsTelegramConnection()) {
+        logger.info(
+          "Telegram credentials changed — reconnecting poller",
+        );
+        startPoller();
+      }
+    },
+  ).asFuture());
+
+  // Scheduler stream: emits one synthetic event per due schedule on
+  // its own tick. Schedules with `no_agent: true` are short-circuited
+  // here — they run a tool and deliver verbatim, never reaching the
+  // orchestrator.
+  final scheduler = Scheduler(vaultPath: config.vaultPath, logger: logger);
+  final scheduleOut = StreamController<Event>();
+  unawaited(_runScheduler(
+    scheduler: scheduler,
+    out: scheduleOut,
+    envStore: envStore,
+    config: config,
+    logger: logger,
+  ));
+
+  final events = telegramOut.stream
+      .merge(CliEvents())
+      .merge(heartbeat)
+      .merge(scheduleOut.stream);
 
   var history = IList<Event>();
+  var lastToolCount = startupAllowlist.length;
 
-  await for (final event in events) {
-    if (isAgent) {
-      _logJson({"type": "event", "id": event.id, "content": event.content});
-    } else {
-      logger.info("[${event.id}] ${event.content}");
+  try {
+    await for (final event in events) {
+      if (isAgent) {
+        _logJson({"type": "event", "id": event.id, "content": event.content});
+      } else {
+        logger.info("[${event.id}] ${event.content}");
+      }
+      // Pre-LLM admin command intercept on Telegram. Known commands
+      // are handled structurally (no LLM); unknown `/`-prefixes fall
+      // through to the orchestrator. CLI is unaffected (the user
+      // already has shell access).
+      if (event.channel is TelegramChannel) {
+        final cmd = parseAdminCommand(event.content);
+        if (cmd != null) {
+          await _handleAdminCommand(
+            event: event,
+            command: cmd,
+            config: config,
+            envStore: envStore,
+            logger: logger,
+          );
+          continue;
+        }
+      }
+      history = _addToHistory(history, event);
+      try {
+        // Reload the allowlist per event — vault edits propagate
+        // without restart, same discipline as capabilities.
+        final liveAllowlist = await LoadAllowlist(resolveAllowlistPath(
+          vaultPath: config.vaultPath,
+          templatesPath: config.templatesPath,
+          override: config.allowlistOverride,
+        ));
+        if (liveAllowlist.length != lastToolCount) {
+          logger.info(
+            "Allowlist reload: $lastToolCount → ${liveAllowlist.length} "
+            "tool(s)",
+          );
+          lastToolCount = liveAllowlist.length;
+        }
+        await _processEvent(
+          event: event,
+          allowlist: liveAllowlist,
+          config: config,
+          envStore: envStore,
+          history: history,
+          logger: logger,
+          isAgent: isAgent,
+        );
+      } on Exception catch (e, st) {
+        logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
+      }
     }
-    history = _addToHistory(history, event);
-    try {
-      await _processEvent(
-        event: event,
-        allowlist: allowlist,
-        config: config,
-        history: history,
-        logger: logger,
-        isAgent: isAgent,
-      );
-    } on Exception catch (e, st) {
-      logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
-    }
+  } finally {
+    await telegramSub?.cancel();
+    await telegramOut.close();
+    await scheduleOut.close();
   }
 }
 
@@ -120,6 +243,7 @@ Future<void> _processEvent({
   required Event event,
   required IList<AllowlistedTool> allowlist,
   required HorizonConfig config,
+  required EnvStore envStore,
   required IList<Event> history,
   required Logger logger,
   required bool isAgent,
@@ -174,12 +298,12 @@ Future<void> _processEvent({
   if (event.channel is TelegramChannel && !isHeartbeat) {
     await SendChatActionTyping(
       channel: event.channel,
-      telegramToken: config.telegramToken,
+      telegramToken: envStore.telegramToken,
     );
     typingTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
       await SendChatActionTyping(
         channel: event.channel,
-        telegramToken: config.telegramToken,
+        telegramToken: envStore.telegramToken,
       );
     });
   }
@@ -189,36 +313,56 @@ Future<void> _processEvent({
     capabilities: capsForPipeline,
     allowlist: allowlist,
     config: config,
+    envStore: envStore,
     recentEvents: history,
     logger: logger,
     heartbeatMode: isHeartbeat,
   );
   final replies = <String>[];
   TelegramLiveReply? live;
-  if (event.channel is TelegramChannel && !isHeartbeat && !isAgent) {
-    live = TelegramLiveReply(
-      token: config.telegramToken,
-      chatId: (event.channel as TelegramChannel).value.chatId,
+  if (event.channel is TelegramChannel && !isHeartbeat) {
+    // Vault override of the CLI flag, so `/quiet` and `/loud` (or a
+    // hand-edit of preferences.md) take effect on the next event with
+    // no restart. Mode (agent/human) is orthogonal: Telegram still
+    // gets live edits in agent mode; stdout JSON is purely additive.
+    final prefs = await LoadPreferences(
+      vaultPath: config.vaultPath,
+      fallback: Preferences(streamUi: config.streamUi),
     );
+    if (prefs.streamUi) {
+      live = TelegramLiveReply(
+        token: envStore.telegramToken,
+        chatId: (event.channel as TelegramChannel).value.chatId,
+      );
+    }
   }
+  // Mode/output orthogonality: `live` (Telegram edits) and `_logJson`
+  // (agent stdout) and `stdout.write` (human CLI streaming) are
+  // independent. Each pipeline event fires every channel that
+  // applies. agent mode = "ALSO emit JSON to stdout"; never "skip
+  // Telegram delivery".
   var streamingToStdout = false;
   var streamedAnyText = false;
+  final ch = event.channel;
+  final isCliHuman = ch is CliChannel && !isAgent;
   try {
     await for (final pe in pipeline) {
       switch (pe) {
         case PipelineReasoningDelta(:final text):
           if (live != null) {
             live.showReasoning(text);
-          } else if (isAgent) {
+          }
+          if (isAgent) {
             _logJson({"type": "reasoning_delta", "text": text});
           }
         case PipelineTextDelta(:final text):
           if (live != null) {
             live.showAnswer(text);
-          } else if (isAgent) {
+          }
+          if (isAgent) {
             _logJson({"type": "text_delta", "text": text});
-          } else {
-            // CLI: write tokens as they stream.
+          }
+          if (isCliHuman) {
             stdout.write(text);
             streamingToStdout = true;
             streamedAnyText = true;
@@ -226,12 +370,11 @@ Future<void> _processEvent({
         case PipelineTextReset():
           if (live != null) {
             live.resetAnswer();
-          } else if (isAgent) {
+          }
+          if (isAgent) {
             _logJson({"type": "text_reset"});
-          } else if (streamingToStdout) {
-            // Visually mark intermediate narration was discarded
-            // so the user understands the next text is the real
-            // answer.
+          }
+          if (isCliHuman && streamingToStdout) {
             stdout
               ..writeln()
               ..writeln("[discarded intermediate narration]");
@@ -241,13 +384,15 @@ Future<void> _processEvent({
         case PipelineToolStarted(:final name, :final args):
           if (live != null) {
             live.showTool(name, args);
-          } else if (isAgent) {
+          }
+          if (isAgent) {
             _logJson({
               "type": "tool_started",
               "name": name,
               "args": args.unlock,
             });
-          } else {
+          }
+          if (isCliHuman) {
             if (streamingToStdout) {
               stdout.writeln();
               streamingToStdout = false;
@@ -264,14 +409,31 @@ Future<void> _processEvent({
             replies.add(timed);
             if (isAgent) {
               _logJson({"type": "agent_reply", "text": timed});
+            }
+            // Side-effect delivery — runs regardless of mode.
+            if (ch is ScheduleChannel) {
+              await _routeScheduleReply(
+                deliver: parseDeliverTag(ch.value.deliver),
+                reply: timed,
+                envStore: envStore,
+                logger: logger,
+              );
+              logger.info("[reply] $timed");
             } else if (live != null) {
               await live.finalize(timed);
               logger.info("[reply] $timed");
+            } else if (ch is TelegramChannel) {
+              // Telegram with stream UI off (or heartbeat — though
+              // heartbeats don't usually reply).
+              await SendReply(
+                channel: ch,
+                text: timed,
+                telegramToken: envStore.telegramToken,
+              );
+              logger.info("[reply] $timed");
             } else if (streamedAnyText) {
-              // Text already in stdout; just append the timing footer
-              // and a debug log line for the file logger. Avoid
-              // logger.info because that would re-print the full
-              // reply on the console.
+              // CLI human mode: tokens already in stdout, just
+              // append the timing footer.
               if (streamingToStdout) {
                 stdout.writeln();
                 streamingToStdout = false;
@@ -285,11 +447,6 @@ Future<void> _processEvent({
               logger.debug("[reply] (${text.length} chars) $timed");
             } else {
               logger.info("[reply] $timed");
-              await SendReply(
-                channel: event.channel,
-                text: timed,
-                telegramToken: config.telegramToken,
-              );
             }
           }
       }
@@ -309,6 +466,190 @@ Future<void> _processEvent({
 
   if (!isAgent) {
     _logBlue("Processing complete for ${event.id}");
+  }
+}
+
+Future<void> _runScheduler({
+  required Scheduler scheduler,
+  required StreamController<Event> out,
+  required EnvStore envStore,
+  required HorizonConfig config,
+  required Logger logger,
+}) async {
+  await for (final fire in scheduler.tick()) {
+    scheduler.recordFire(fire.schedule, fire.firedAt);
+    if (fire.schedule.noAgent) {
+      // Watchdog mode: run the tool, deliver verbatim. Never the LLM.
+      try {
+        // Reload the allowlist at fire time so a freshly-edited tool
+        // is available to watchdog jobs without restart.
+        final allowlist = await LoadAllowlist(resolveAllowlistPath(
+          vaultPath: config.vaultPath,
+          templatesPath: config.templatesPath,
+          override: config.allowlistOverride,
+        ));
+        await _runNoAgentSchedule(
+          fire: fire,
+          allowlist: allowlist,
+          envStore: envStore,
+          config: config,
+          logger: logger,
+        );
+      } on Exception catch (e, st) {
+        logger.error(
+          "no_agent schedule ${fire.schedule.id}: $e",
+          stackTrace: st,
+        );
+      }
+      continue;
+    }
+    out.add(scheduleEvent(fire));
+  }
+}
+
+/// Parses `prompt` as `<tool> <arg1> <arg2>...` and dispatches the
+/// tool through the same executor agent-invoked tools use. Empty
+/// stdout is silent; non-empty is delivered to the schedule's
+/// `deliver:` target.
+Future<void> _runNoAgentSchedule({
+  required ScheduleFire fire,
+  required IList<AllowlistedTool> allowlist,
+  required EnvStore envStore,
+  required HorizonConfig config,
+  required Logger logger,
+}) async {
+  final parts = fire.schedule.prompt.trim().split(RegExp(r"\s+"));
+  if (parts.isEmpty || parts.first.isEmpty) {
+    logger.warning(
+      "no_agent schedule ${fire.schedule.id}: empty prompt",
+    );
+    return;
+  }
+  final toolName = parts.first;
+  final tool = allowlist.where((t) => t.name == toolName).firstOrNull;
+  if (tool == null) {
+    logger.warning(
+      "no_agent schedule ${fire.schedule.id}: unknown tool '$toolName'",
+    );
+    return;
+  }
+  // Map positional argv to the tool's parameter names in declared
+  // order. Mismatched arity is reported and the schedule is skipped
+  // until the user fixes it.
+  final paramNames = tool.parameters.keys.toList();
+  if (parts.length - 1 != paramNames.length) {
+    logger.warning(
+      "no_agent schedule ${fire.schedule.id}: tool '$toolName' "
+      "expects ${paramNames.length} arg(s), got ${parts.length - 1}",
+    );
+    return;
+  }
+  final args = <String, String>{};
+  for (var i = 0; i < paramNames.length; i++) {
+    args[paramNames[i]] = parts[i + 1];
+  }
+  final result = await ExecuteTool(
+    allowlist: allowlist,
+    toolName: toolName,
+    toolArgs: args.lock,
+    vaultPath: config.vaultPath,
+    envStore: envStore,
+  );
+  // Empty stdout (the harness's "(no output)" sentinel) → silent.
+  // The executor returns "(no output)" exactly when stdout is
+  // empty; intercept that to keep watchdog jobs quiet on success.
+  final clean = result == "(no output)" ? "" : result.trim();
+  if (clean.isEmpty) {
+    logger.debug(
+      "no_agent schedule ${fire.schedule.id}: silent",
+    );
+    return;
+  }
+  logger.info(
+    "no_agent schedule ${fire.schedule.id}: ${clean.length} chars → "
+    "${_deliverTagFor(fire.schedule.deliver)}",
+  );
+  // Telegram replies use parse_mode=HTML, so escape and wrap the raw
+  // command output in <pre> so meta-chars don't 400 the API.
+  final escaped = clean
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+  final reply = result.startsWith("Error")
+      ? "<b>no_agent error</b> from <code>${fire.schedule.id}</code>"
+          "\n<pre>$escaped</pre>"
+      : "<pre>$escaped</pre>";
+  await _routeScheduleReply(
+    deliver: fire.schedule.deliver,
+    reply: reply,
+    envStore: envStore,
+    logger: logger,
+  );
+}
+
+String _deliverTagFor(DeliverTarget t) => switch (t) {
+      DeliverNone() => "none",
+      DeliverOrigin() => "origin",
+      DeliverTelegram(:final chatId) => "telegram($chatId)",
+    };
+
+Future<void> _routeScheduleReply({
+  required DeliverTarget deliver,
+  required String reply,
+  required EnvStore envStore,
+  required Logger logger,
+}) async {
+  switch (deliver) {
+    case DeliverNone():
+      logger.debug("Schedule reply discarded (deliver: none)");
+    case DeliverOrigin():
+      // No origin recorded for this schedule; log and drop. Schedules
+      // that need delivery should specify `telegram(<chat_id>)`
+      // explicitly.
+      logger.warning(
+        "Schedule reply with deliver: origin has no origin recorded; "
+        "drop. Use deliver: telegram(<chat_id>).",
+      );
+    case DeliverTelegram(:final chatId):
+      await SendReply(
+        channel: TelegramChannel((chatId: chatId)),
+        text: reply,
+        telegramToken: envStore.telegramToken,
+      );
+  }
+}
+
+Future<void> _handleAdminCommand({
+  required Event event,
+  required AdminCommand command,
+  required HorizonConfig config,
+  required EnvStore envStore,
+  required Logger logger,
+}) async {
+  logger.info("[admin] ${event.id}: ${event.content}");
+  try {
+    final reply = await ExecuteAdminCommand(
+      command: command,
+      vaultPath: config.vaultPath,
+      envStore: envStore,
+      logger: logger,
+    );
+    await SendReply(
+      channel: event.channel,
+      text: reply,
+      telegramToken: envStore.telegramToken,
+    );
+  } on Exception catch (e, st) {
+    logger.error("Admin command error: $e", stackTrace: st);
+    try {
+      await SendReply(
+        channel: event.channel,
+        text: "Admin command failed: $e",
+        telegramToken: envStore.telegramToken,
+      );
+    } on Object {
+      // Best-effort error reply.
+    }
   }
 }
 
@@ -361,5 +702,6 @@ String _withTiming(
   return switch (channel) {
     TelegramChannel() => "$text\n\n<i>— $formatted</i>",
     CliChannel() => "$text\n\n— $formatted",
+    ScheduleChannel() => "$text\n\n— $formatted",
   };
 }

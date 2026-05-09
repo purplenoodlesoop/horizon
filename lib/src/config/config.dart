@@ -11,17 +11,19 @@ final class HumanMode = Mode<()> with _ModeMixin;
 
 final class AgentMode = Mode<()> with _ModeMixin;
 
+/// Static, startup-only configuration. Rotatable secrets
+/// (`TELEGRAM_TOKEN`, `FIREWORKS_TOKEN`, `TAVILY_TOKEN`,
+/// `TELEGRAM_USERNAME`) live in `EnvStore`, not here, so they
+/// hot-reload on `.env` changes without a process restart.
 @freezed
 abstract class HorizonConfig with _$HorizonConfig {
   const factory HorizonConfig({
-    required String telegramToken,
-    required String telegramUsername,
-    required String fireworksToken,
-    required String tavilyToken,
     required String vaultPath,
     required Mode<()> mode,
-    required String allowlistPath,
+    required String allowlistOverride,
     required String templatesPath,
     required Duration heartbeatInterval,
+    required bool streamUi,
+    required String envFilePath,
   }) = _HorizonConfig;
 }

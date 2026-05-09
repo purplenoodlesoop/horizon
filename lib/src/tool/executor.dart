@@ -4,6 +4,7 @@ import "dart:io";
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
 
+import "package:horizon/src/config/env_store.dart";
 import "package:horizon/src/tool/allowlist.dart";
 import "package:horizon/src/tool/security.dart";
 
@@ -36,9 +37,13 @@ class ExecuteTool extends Fx<String> {
     required String toolName,
     required IMap<String, String> toolArgs,
     required String vaultPath,
-    required String telegramToken,
-    required String tavilyToken,
+    required EnvStore envStore,
   }) : super(() async {
+          // Snapshot tokens at execution start. The executor reads
+          // them via envStore so live `.env` rotation takes effect on
+          // the next tool call without restarting the harness.
+          final telegramToken = envStore.telegramToken;
+          final tavilyToken = envStore.tavilyToken;
           final tool = allowlist
               .where((t) => t.name == toolName)
               .firstOrNull;

@@ -5,6 +5,7 @@ import "package:horizon/src/event/event.dart";
 String formatChannelName(Channel<Object?> channel) => switch (channel) {
   TelegramChannel(:final value) => "telegram(${value.chatId})",
   CliChannel() => "cli",
+  ScheduleChannel(:final value) => "schedule(${value.scheduleId})",
 };
 
 String formatEventSummary(
