@@ -107,21 +107,24 @@ enum _LiveMode { idle, thinking, tool, answer, finalized }
 /// edit as deltas arrive. Plain text during streaming (so a
 /// half-streamed `<b>` doesn't 400 the API), HTML on finalize.
 ///
-/// Lifecycle:
-/// 1. `showReasoning(delta)` / `showTool(name, args)` /
-///    `showAnswer(delta)` — push state. Edits are throttled.
-/// 2. `finalize(text)` — flush immediately with `parse_mode=HTML`.
-///    Falls back to a fresh `sendMessage` if the edit fails (so the
-///    user always gets the answer even if mid-stream HTML caused a
-///    400 on the last successful edit).
+/// Two modes:
+/// - **streaming = true** (default, "loud"): show* calls cycle the
+///   message through reasoning preview / tool status / streamed
+///   answer; finalize() edits to the HTML reply.
+/// - **streaming = false** ("quiet"): a single "Thinking…" placeholder
+///   is sent eagerly on `start()`; show* calls are no-ops; finalize()
+///   edits the placeholder to the HTML reply. The user sees one
+///   reaction at the start and one final answer — no flicker.
 class TelegramLiveReply {
   TelegramLiveReply({
     required this.token,
     required this.chatId,
+    this.streaming = true,
   });
 
   final String token;
   final String chatId;
+  final bool streaming;
 
   String? _messageId;
   String? _lastSentText;
@@ -140,8 +143,23 @@ class TelegramLiveReply {
   var _reasoningBuf = "";
   var _answerBuf = "";
 
+  /// Sends the initial placeholder. Idempotent. In quiet mode this
+  /// fires immediately on construction (so the user sees "Thinking…"
+  /// without waiting for the first reasoning token); in streaming
+  /// mode it's a no-op (the first show* call sends the first state).
+  Future<void> start() async {
+    if (!streaming) {
+      _enqueue("Thinking…", asHtml: false);
+      // Wait for the placeholder to actually go out before returning,
+      // so the user sees the reaction before any tool work begins.
+      while (_dirty && !_finalized) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+    }
+  }
+
   void showReasoning(String delta) {
-    if (_finalized) {
+    if (_finalized || !streaming) {
       return;
     }
     if (_mode != _LiveMode.thinking) {
@@ -158,7 +176,7 @@ class TelegramLiveReply {
   }
 
   void showTool(String name, IMap<String, String> args) {
-    if (_finalized) {
+    if (_finalized || !streaming) {
       return;
     }
     _mode = _LiveMode.tool;
@@ -166,7 +184,7 @@ class TelegramLiveReply {
   }
 
   void showAnswer(String delta) {
-    if (_finalized) {
+    if (_finalized || !streaming) {
       return;
     }
     if (_mode != _LiveMode.answer) {
@@ -183,7 +201,7 @@ class TelegramLiveReply {
   /// reasoning preview so the user sees something while the next
   /// cycle starts.
   void resetAnswer() {
-    if (_finalized) {
+    if (_finalized || !streaming) {
       return;
     }
     _answerBuf = "";

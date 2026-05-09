@@ -329,12 +329,15 @@ Future<void> _processEvent({
       vaultPath: config.vaultPath,
       fallback: Preferences(streamUi: config.streamUi),
     );
-    if (prefs.streamUi) {
-      live = TelegramLiveReply(
-        token: envStore.telegramToken,
-        chatId: (event.channel as TelegramChannel).value.chatId,
-      );
-    }
+    live = TelegramLiveReply(
+      token: envStore.telegramToken,
+      chatId: (event.channel as TelegramChannel).value.chatId,
+      streaming: prefs.streamUi,
+    );
+    // In quiet mode this immediately sends "Thinking…" so the user
+    // sees a reaction before any tool work begins. In streaming
+    // mode it's a no-op — the first show* call sends the placeholder.
+    await live.start();
   }
   // Mode/output orthogonality: `live` (Telegram edits) and `_logJson`
   // (agent stdout) and `stdout.write` (human CLI streaming) are
