@@ -63,6 +63,19 @@ class TelegramPoller extends StreamFx<Event> {
                 );
                 continue;
               }
+              final chosen = update["chosen_inline_result"];
+              if (chosen is Map) {
+                final inlineEvent = _handleChosenInlineResult(
+                  chosen: chosen,
+                  allowedUsernames: allowedUsernames,
+                  updateId: updateId,
+                  logger: logger,
+                );
+                if (inlineEvent != null) {
+                  yield inlineEvent;
+                }
+                continue;
+              }
               final message = update["message"];
               if (message is! Map) {
                 continue;
@@ -354,21 +367,28 @@ String _sanitizeFilename(String name) {
   return cleaned.substring(0, 80);
 }
 
+const _inlineRunResultId = "horizon-inline-run";
+const _inlineGuestResultId = "horizon-inline-guest";
+
 /// Inline-mode handler. Telegram delivers an `inline_query` update
 /// whenever a user types `@yourbot foo` in any chat (even chats the
 /// bot is not a member of). The bot owes a sub-second
 /// `answerInlineQuery` reply or the client shows nothing.
 ///
-/// The lockdown semantics:
-/// - Non-allowlisted users get a single canned article result
-///   directing them to message the owner. No vault access, no LLM
-///   call.
-/// - Allowlisted users get a single canned result acknowledging that
-///   inline mode is a v1 placeholder; the real pipeline runs over
-///   DMs, which is where it has time to think.
-///
-/// `cache_time: 0` keeps Telegram from showing stale results if we
-/// change behavior — important while this is a thin stub.
+/// Lockdown semantics:
+/// - **Non-allowlisted** users get a canned "private bot" article.
+///   No vault access, no LLM, and the article carries no reply
+///   markup so Telegram does not send us a `chosen_inline_result`
+///   for it.
+/// - **Allowlisted** users get a single "Send to Horizon" article.
+///   The article ships with an empty inline keyboard, which is the
+///   trick Telegram needs to (a) actually deliver
+///   `chosen_inline_result` to us and (b) hand us an
+///   `inline_message_id` we can later edit. When the user taps it,
+///   the chat shows a "Working on…" placeholder and the harness
+///   gets an event whose `InlineChannel` carries that message id;
+///   on `editMessageText` with the LLM answer the placeholder
+///   becomes the final reply, in-place.
 Future<void> _answerInlineQuery({
   required String token,
   required Map<dynamic, dynamic> inlineQuery,
@@ -384,23 +404,32 @@ Future<void> _answerInlineQuery({
   final lower = username is String ? username.toLowerCase() : "";
   final isAllowed =
       allowedUsernames.isNotEmpty && allowedUsernames.contains(lower);
-  final result = isAllowed
-      ? _inlineResult(
-          id: "horizon-inline-allowed",
-          title: "Horizon: inline mode coming soon",
-          description:
-              "Inline answers aren't supported yet — DM the bot directly "
-              "to chat.",
-          message: "(I tried using @horizon inline. It's a placeholder; "
-              "DM the bot to actually chat with it.)",
-        )
-      : _inlineResult(
-          id: "horizon-inline-guest",
-          title: "This bot is private",
-          description: "Message the owner if you need access.",
-          message: "(This Horizon instance is locked down to a private "
-              "allowlist.)",
-        );
+  final rawQuery = inlineQuery["query"];
+  final query = rawQuery is String ? rawQuery.trim() : "";
+
+  final List<Map<String, Object>> results;
+  int cacheTime;
+  if (!isAllowed) {
+    results = [
+      _inlineGuestResult(),
+    ];
+    cacheTime = 300;
+  } else if (query.isEmpty) {
+    // Nothing to run yet — show a hint result, no LLM dispatch.
+    results = [
+      _inlineHintResult(),
+    ];
+    cacheTime = 5;
+  } else {
+    results = [
+      _inlineRunResult(query: query),
+    ];
+    // Per-user, per-query; keep cache short so repeated taps don't
+    // skip the chosen_inline_result delivery Telegram sometimes
+    // suppresses for cached selections.
+    cacheTime = 0;
+  }
+
   try {
     final response = await http.post(
       Uri.parse(
@@ -408,8 +437,8 @@ Future<void> _answerInlineQuery({
       ),
       body: {
         "inline_query_id": queryId,
-        "results": jsonEncode([result]),
-        "cache_time": "0",
+        "results": jsonEncode(results),
+        "cache_time": "$cacheTime",
         "is_personal": "true",
       },
     );
@@ -423,20 +452,92 @@ Future<void> _answerInlineQuery({
   }
 }
 
-Map<String, Object> _inlineResult({
-  required String id,
-  required String title,
-  required String description,
-  required String message,
-}) => {
+/// Build the article that, when tapped, posts a placeholder message
+/// and triggers the orchestrator. The empty `inline_keyboard` is
+/// load-bearing: without it Telegram does not surface
+/// `inline_message_id` to us on `chosen_inline_result`, and we lose
+/// the only handle for editing the message with the answer.
+Map<String, Object> _inlineRunResult({required String query}) {
+  final preview = query.length > 60 ? "${query.substring(0, 59)}…" : query;
+  return {
+    "type": "article",
+    "id": _inlineRunResultId,
+    "title": "Ask Horizon",
+    "description": preview,
+    "input_message_content": {
+      "message_text": "Working on: $preview",
+    },
+    "reply_markup": {
+      "inline_keyboard": <List<Object>>[],
+    },
+  };
+}
+
+Map<String, Object> _inlineHintResult() => {
       "type": "article",
-      "id": id,
-      "title": title,
-      "description": description,
+      "id": "horizon-inline-hint",
+      "title": "Ask Horizon",
+      "description": "Type a question after @horizon to send it.",
       "input_message_content": {
-        "message_text": message,
+        "message_text": "(type a question after @horizon to send it)",
       },
     };
+
+Map<String, Object> _inlineGuestResult() => {
+      "type": "article",
+      "id": _inlineGuestResultId,
+      "title": "This bot is private",
+      "description": "Message the owner if you need access.",
+      "input_message_content": {
+        "message_text": "(This Horizon instance is locked down to a "
+            "private allowlist.)",
+      },
+    };
+
+/// Telegram fires `chosen_inline_result` when an inline result the
+/// user tapped also carries `reply_markup` (or `input_message_content`).
+/// For the allowed `_inlineRunResultId` article we treat the chosen
+/// result as a real user message: produce an Event whose channel is
+/// `InlineChannel(inlineMessageId)` so the harness routes the LLM
+/// answer back via `editMessageText`.
+Event? _handleChosenInlineResult({
+  required Map<dynamic, dynamic> chosen,
+  required Set<String> allowedUsernames,
+  required int updateId,
+  required Logger logger,
+}) {
+  final resultId = chosen["result_id"];
+  if (resultId != _inlineRunResultId) {
+    // Hint and guest results never run the LLM.
+    return null;
+  }
+  final from = chosen["from"];
+  final username = from is Map ? from["username"] : null;
+  final lower = username is String ? username.toLowerCase() : "";
+  if (allowedUsernames.isEmpty || !allowedUsernames.contains(lower)) {
+    // Defence in depth — `_inlineRunResultId` is only offered to
+    // allowlisted users, but reject any race here too.
+    return null;
+  }
+  final inlineMessageId = chosen["inline_message_id"];
+  if (inlineMessageId is! String || inlineMessageId.isEmpty) {
+    logger.warning(
+      "inline: chosen_inline_result missing inline_message_id, "
+      "cannot edit reply",
+    );
+    return null;
+  }
+  final query = chosen["query"];
+  if (query is! String || query.trim().isEmpty) {
+    return null;
+  }
+  return Event(
+    id: "tg_inline_$updateId",
+    content: query.trim(),
+    channel: InlineChannel((inlineMessageId: inlineMessageId)),
+    timestamp: DateTime.now(),
+  );
+}
 
 /// Two-step Telegram file download (`getFile` then bytes), parking
 /// the result under `<vault>/<targetRelPath>`. Returns the absolute

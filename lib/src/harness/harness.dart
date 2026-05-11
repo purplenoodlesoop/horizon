@@ -440,6 +440,18 @@ Future<void> _processEvent({
                 telegramToken: envStore.telegramToken,
               );
               logger.info("[reply] $timed");
+            } else if (ch is InlineChannel) {
+              // Inline mode: bot edits the placeholder article it
+              // posted on chosen_inline_result with the final reply.
+              // No live streaming (we'd need a separate edit-by-
+              // inline_message_id path) — a single post-LLM edit is
+              // enough.
+              await SendReply(
+                channel: ch,
+                text: timed,
+                telegramToken: envStore.telegramToken,
+              );
+              logger.info("[reply] $timed");
             } else if (streamedAnyText) {
               // CLI human mode: tokens already in stdout, just
               // append the timing footer.
@@ -712,5 +724,6 @@ String _withTiming(
     TelegramChannel() => "$text\n\n<i>— $formatted</i>",
     CliChannel() => "$text\n\n— $formatted",
     ScheduleChannel() => "$text\n\n— $formatted",
+    InlineChannel() => "$text\n\n<i>— $formatted</i>",
   };
 }

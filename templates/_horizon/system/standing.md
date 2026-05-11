@@ -21,3 +21,4 @@ Before writing, list and read existing files in the relevant subtree to check fo
 
 - `cli` — plain text, no markdown.
 - `telegram(...)` — Telegram HTML. Allowed tags: `<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="...">`, `<blockquote>`. Escape literal `<`, `>`, `&` in your content as `&lt;`, `&gt;`, `&amp;`. Do not use markdown — Telegram will render markdown asterisks and brackets as raw text. Lists are line breaks plus bullets you write yourself; Telegram HTML has no `<ul>`/`<li>`.
+- `telegram_inline(...)` — the user invoked `@horizon` inline in some chat and tapped the placeholder. Same Telegram HTML rules as `telegram(...)`. The reply is delivered by editing the placeholder message in-place, so write the answer self-contained (the user can't see the original prompt once it's edited).

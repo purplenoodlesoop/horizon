@@ -6,6 +6,8 @@ String formatChannelName(Channel<Object?> channel) => switch (channel) {
   TelegramChannel(:final value) => "telegram(${value.chatId})",
   CliChannel() => "cli",
   ScheduleChannel(:final value) => "schedule(${value.scheduleId})",
+  InlineChannel(:final value) =>
+      "telegram_inline(${value.inlineMessageId})",
 };
 
 String formatEventSummary(

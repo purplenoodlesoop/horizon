@@ -25,8 +25,34 @@ class SendReply extends Fx<void> {
               // Schedule events route their reply via the harness's
               // deliver-tag handling, not the per-event channel.
               break;
+            case InlineChannel(:final value):
+              await _editInlineMessage(
+                token: telegramToken,
+                inlineMessageId: value.inlineMessageId,
+                text: text,
+              );
           }
         });
+}
+
+Future<void> _editInlineMessage({
+  required String token,
+  required String inlineMessageId,
+  required String text,
+}) async {
+  // Telegram caps message text at 4096 chars; editInlineMessageText
+  // rejects longer payloads with a 400.
+  final body = text.length > 4096 ? "${text.substring(0, 4095)}…" : text;
+  await http.post(
+    Uri.parse(
+      "https://api.telegram.org/bot$token/editMessageText",
+    ),
+    body: {
+      "inline_message_id": inlineMessageId,
+      "text": body,
+      "parse_mode": "HTML",
+    },
+  );
 }
 
 /// Sends `sendChatAction(typing)` so the user sees "typing..." in
@@ -52,6 +78,11 @@ class SendChatActionTyping extends Fx<void> {
                 // pipeline.
               }
             case ScheduleChannel():
+              break;
+            case InlineChannel():
+              // No chat_id for inline messages; the placeholder
+              // article text already signals "working on it" to the
+              // user.
               break;
           }
         });

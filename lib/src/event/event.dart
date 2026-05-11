@@ -17,6 +17,15 @@ final class CliChannel = Channel<()> with _ChannelMixin;
 final class ScheduleChannel
     = Channel<({String scheduleId, String deliver})> with _ChannelMixin;
 
+/// A Telegram inline-mode event: the user invoked `@horizon <query>`
+/// in some chat (any chat — the bot doesn't need to be a member) and
+/// tapped the placeholder article we returned. Telegram gives us an
+/// `inline_message_id` (not a chat_id + message_id pair) which is the
+/// only handle we have for editing the message later. Replies go out
+/// via `editMessageText` with that handle.
+final class InlineChannel
+    = Channel<({String inlineMessageId})> with _ChannelMixin;
+
 @freezed
 abstract class Event with _$Event {
   const factory Event({
