@@ -445,13 +445,19 @@ Future<void> _processEvent({
               // posted on chosen_inline_result with the final reply.
               // No live streaming (we'd need a separate edit-by-
               // inline_message_id path) — a single post-LLM edit is
-              // enough.
+              // enough. Prepend the original query as a blockquote
+              // so the conversation isn't lost once the placeholder
+              // is overwritten (the user typed it inline; without
+              // this prefix only the answer would remain).
+              final quoted = "<blockquote>"
+                  "${_htmlEscape(event.content)}</blockquote>\n\n"
+                  "$timed";
               await SendReply(
                 channel: ch,
-                text: timed,
+                text: quoted,
                 telegramToken: envStore.telegramToken,
               );
-              logger.info("[reply] $timed");
+              logger.info("[reply] $quoted");
             } else if (streamedAnyText) {
               // CLI human mode: tokens already in stdout, just
               // append the timing footer.
@@ -697,6 +703,11 @@ void _logBlue(String message) {
 /// before its "— Xs" footer so we can print just the footer when the
 /// body has already been streamed to stdout.
 String _trailingFooter(String suffix) => suffix.trim();
+
+String _htmlEscape(String s) => s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 
 String _briefArgs(IMap<String, String> args) {
   if (args.isEmpty) {

@@ -21,9 +21,18 @@ class TelegramPoller extends StreamFx<Event> {
   }) : super(() async* {
         var offset = 0;
         while (true) {
+          // Pass allowed_updates explicitly so inline_query and
+          // chosen_inline_result are delivered. Telegram remembers
+          // the most recent allowed_updates list across getUpdates
+          // calls; without an explicit list a previously-restrictive
+          // setting can silently suppress inline updates even after
+          // inline mode is enabled in BotFather.
           final uri = Uri.parse(
             "https://api.telegram.org/bot$botToken/getUpdates"
-            "?timeout=$_pollingTimeout&offset=$offset",
+            "?timeout=$_pollingTimeout&offset=$offset"
+            "&allowed_updates="
+            "%5B%22message%22%2C%22edited_message%22%2C%22inline_query%22"
+            "%2C%22chosen_inline_result%22%2C%22callback_query%22%5D",
           );
           try {
             final response = await http.get(uri);
@@ -467,8 +476,18 @@ Map<String, Object> _inlineRunResult({required String query}) {
     "input_message_content": {
       "message_text": "Working on: $preview",
     },
+    // Telegram only delivers `inline_message_id` on
+    // `chosen_inline_result` when the article carries a non-empty
+    // `inline_keyboard`. The button is decorative — `callback_data`
+    // points at a no-op handler — and the harness clears the markup
+    // on the final edit so it disappears once the real answer
+    // arrives.
     "reply_markup": {
-      "inline_keyboard": <List<Object>>[],
+      "inline_keyboard": [
+        [
+          {"text": "Thinking…", "callback_data": "horizon-inline-noop"},
+        ],
+      ],
     },
   };
 }

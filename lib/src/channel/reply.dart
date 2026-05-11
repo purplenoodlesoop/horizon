@@ -43,7 +43,12 @@ Future<void> _editInlineMessage({
   // Telegram caps message text at 4096 chars; editInlineMessageText
   // rejects longer payloads with a 400.
   final body = text.length > 4096 ? "${text.substring(0, 4095)}…" : text;
-  await http.post(
+  // Clear the "Thinking…" placeholder button by passing an empty
+  // inline_keyboard. The button was load-bearing for getting
+  // inline_message_id back on chosen_inline_result; it has no use
+  // once the final answer is in.
+  const clearedMarkup = '{"inline_keyboard":[]}';
+  final response = await http.post(
     Uri.parse(
       "https://api.telegram.org/bot$token/editMessageText",
     ),
@@ -51,8 +56,24 @@ Future<void> _editInlineMessage({
       "inline_message_id": inlineMessageId,
       "text": body,
       "parse_mode": "HTML",
+      "reply_markup": clearedMarkup,
     },
   );
+  // Recovery: if Telegram rejects the HTML (model emitted invalid
+  // tags), retry as plain text so the user actually sees the
+  // answer instead of being stuck on "Working on: …".
+  if (response.statusCode != 200) {
+    await http.post(
+      Uri.parse(
+        "https://api.telegram.org/bot$token/editMessageText",
+      ),
+      body: {
+        "inline_message_id": inlineMessageId,
+        "text": _stripHtml(body),
+        "reply_markup": clearedMarkup,
+      },
+    );
+  }
 }
 
 /// Sends `sendChatAction(typing)` so the user sees "typing..." in
@@ -262,19 +283,31 @@ class TelegramLiveReply {
     try {
       await _doSendOrEdit(text, asHtml: true);
       _dirty = false;
+      return;
     } on Object {
-      // Edit failed (probably malformed HTML at the prior preview
-      // state). Fall back to sending a brand-new message so the
-      // answer reaches the user one way or another.
-      try {
-        final id = await _send(text, asHtml: true);
-        _messageId = id;
-        _lastSentText = text;
-        _lastSentAsHtml = true;
-        _dirty = false;
-      } on Object {
-        // Best-effort.
-      }
+      // HTML parse failure (e.g. the model emitted `<br/>` or an
+      // unclosed tag). Recover by sending a plain-text version — at
+      // worst the user sees the raw HTML markers, but they actually
+      // see the answer instead of being stuck on the "Thinking…"
+      // placeholder.
+    }
+    final plain = _stripHtml(text);
+    try {
+      await _doSendOrEdit(plain, asHtml: false);
+      _dirty = false;
+      return;
+    } on Object {
+      // Edit failed too — try a fresh plain-text send so the user
+      // gets something instead of nothing.
+    }
+    try {
+      final id = await _send(plain, asHtml: false);
+      _messageId = id;
+      _lastSentText = plain;
+      _lastSentAsHtml = false;
+      _dirty = false;
+    } on Object {
+      // Best-effort: out of recovery options.
     }
   }
 
@@ -409,6 +442,18 @@ class TelegramLiveReply {
     }
   }
 }
+
+/// Strip HTML tags and decode the three escapes Telegram cares about,
+/// for the last-resort plain-text fallback when finalize-as-HTML
+/// fails. Not a full HTML parser — just enough to turn a Telegram
+/// HTML reply into readable plain text.
+final _htmlTagRe = RegExp(r"<[^>]+>");
+
+String _stripHtml(String html) => html
+    .replaceAll(_htmlTagRe, "")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 
 String _tail(String s, int max) {
   if (s.length <= max) {
