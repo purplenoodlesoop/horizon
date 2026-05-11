@@ -3,11 +3,11 @@ import "dart:io";
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 
 /// Mutable in-memory env-var store. Source of truth at runtime for
-/// rotatable secrets (`TELEGRAM_TOKEN`, `FIREWORKS_TOKEN`,
-/// `TAVILY_TOKEN`, …). Initially populated from the `.env` file
-/// merged over `Platform.environment`. Watched by `WatchEnvFile`,
-/// which calls `reload()` on change so token rotation takes effect
-/// without a restart.
+/// rotatable secrets (`TELEGRAM_TOKEN`, `LLM_TOKEN`, `TAVILY_TOKEN`,
+/// …) and the LLM endpoint config (`LLM_URL`, `LLM_MODEL`).
+/// Initially populated from the `.env` file merged over
+/// `Platform.environment`. Watched by `WatchEnvFile`, which calls
+/// `reload()` on change so rotation takes effect without a restart.
 class EnvStore {
   EnvStore._({required this.envFilePath, required Map<String, String> initial})
       : _values = Map.of(initial);
@@ -23,7 +23,25 @@ class EnvStore {
       _values[key] ?? Platform.environment[key] ?? "";
 
   String get telegramToken => get("TELEGRAM_TOKEN");
-  String get fireworksToken => get("FIREWORKS_TOKEN");
+  String get llmToken => get("LLM_TOKEN");
+
+  /// Defaults to CrofAI's OpenAI-compatible endpoint. Override via
+  /// `LLM_URL` (env or `--llm-url`) to point at any other provider.
+  String get llmUrl {
+    final v = get("LLM_URL");
+    return v.isEmpty ? "https://crof.ai/v1" : v;
+  }
+
+  /// Defaults to Kimi K2.6 (MoonshotAI) as exposed by CrofAI. Override
+  /// via `LLM_MODEL` (env or `--llm-model`). When you change `LLM_URL`
+  /// you almost always need to change `LLM_MODEL` too — model ids are
+  /// provider-specific (e.g. `accounts/fireworks/models/kimi-k2p5` on
+  /// Fireworks vs `kimi-k2.6` on CrofAI).
+  String get llmModel {
+    final v = get("LLM_MODEL");
+    return v.isEmpty ? "kimi-k2.6" : v;
+  }
+
   String get tavilyToken => get("TAVILY_TOKEN");
 
   /// Username with optional leading `@` stripped, lowercased.

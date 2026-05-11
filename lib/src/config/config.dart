@@ -11,10 +11,11 @@ final class HumanMode = Mode<()> with _ModeMixin;
 
 final class AgentMode = Mode<()> with _ModeMixin;
 
-/// Static, startup-only configuration. Rotatable secrets
-/// (`TELEGRAM_TOKEN`, `FIREWORKS_TOKEN`, `TAVILY_TOKEN`,
-/// `TELEGRAM_USERNAME`) live in `EnvStore`, not here, so they
-/// hot-reload on `.env` changes without a process restart.
+/// Static, startup-only configuration. Rotatable secrets and the
+/// LLM endpoint config (`TELEGRAM_TOKEN`, `LLM_TOKEN`, `LLM_URL`,
+/// `LLM_MODEL`, `TAVILY_TOKEN`, `TELEGRAM_USERNAME`) live in
+/// `EnvStore`, not here, so they hot-reload on `.env` changes
+/// without a process restart.
 @freezed
 abstract class HorizonConfig with _$HorizonConfig {
   const factory HorizonConfig({

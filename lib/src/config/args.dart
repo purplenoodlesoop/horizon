@@ -24,8 +24,23 @@ final _parser = ArgParser()
         "Or set TELEGRAM_USERNAME in env file.",
   )
   ..addOption(
-    "fireworks-token",
-    help: "Fireworks.ai API token (overrides FIREWORKS_TOKEN in env file)",
+    "llm-token",
+    help: "LLM provider API token (overrides LLM_TOKEN in env file). "
+        "Default backend is CrofAI; any OpenAI-compatible provider works "
+        "by overriding LLM_URL/LLM_MODEL.",
+  )
+  ..addOption(
+    "llm-url",
+    help: "Base URL for an OpenAI-compatible chat completions endpoint, "
+        "without the trailing /chat/completions (overrides LLM_URL in env "
+        "file). Defaults to https://crof.ai/v1. Other options: "
+        "https://api.fireworks.ai/inference/v1, https://openrouter.ai/api/v1.",
+  )
+  ..addOption(
+    "llm-model",
+    help: "Model id passed in the chat completions request (overrides "
+        "LLM_MODEL in env file). Defaults to kimi-k2.6 (the CrofAI id). "
+        "On Fireworks use accounts/fireworks/models/kimi-k2p5.",
   )
   ..addOption(
     "tavily-token",
@@ -100,12 +115,9 @@ class ParseArgs extends Fx<({HorizonConfig config, EnvStore envStore})> {
           envStore,
           "TELEGRAM_USERNAME",
         );
-        _applyFlagOverride(
-          results,
-          "fireworks-token",
-          envStore,
-          "FIREWORKS_TOKEN",
-        );
+        _applyFlagOverride(results, "llm-token", envStore, "LLM_TOKEN");
+        _applyFlagOverride(results, "llm-url", envStore, "LLM_URL");
+        _applyFlagOverride(results, "llm-model", envStore, "LLM_MODEL");
         _applyFlagOverride(results, "tavily-token", envStore, "TAVILY_TOKEN");
 
         if (envStore.telegramToken.isEmpty) {
@@ -115,10 +127,12 @@ class ParseArgs extends Fx<({HorizonConfig config, EnvStore envStore})> {
           );
           exit(1);
         }
-        if (envStore.fireworksToken.isEmpty) {
+        if (envStore.llmToken.isEmpty) {
           stderr.writeln(
-            "Error: FIREWORKS_TOKEN is required (set --fireworks-token, or "
-            "FIREWORKS_TOKEN in .env)",
+            "Error: LLM_TOKEN is required (set --llm-token, or LLM_TOKEN "
+            "in .env). Default backend is CrofAI (https://crof.ai/v1, "
+            "kimi-k2.6); override LLM_URL/LLM_MODEL to use a different "
+            "provider.",
           );
           exit(1);
         }

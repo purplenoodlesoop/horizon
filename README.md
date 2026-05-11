@@ -1,6 +1,6 @@
 # Horizon
 
-A personal multi-agent assistant. Vault-resident capabilities, single-thread centralized orchestration, signal-driven heartbeat, Obsidian as state, Telegram + CLI as channels, Kimi K2.5 on Fireworks as the LLM. One user, one vault, one binary.
+A personal multi-agent assistant. Vault-resident capabilities, single-thread centralized orchestration, signal-driven heartbeat, Obsidian as state, Telegram + CLI as channels, Kimi K2.6 on CrofAI as the default LLM (any OpenAI-compatible provider works). One user, one vault, one binary.
 
 This README is the only source of documentation.
 
@@ -52,9 +52,12 @@ Three properties make this different from the other personal-assistant framework
 ```sh
 # .env in your current directory must contain at least
 #   TELEGRAM_TOKEN=<bot token>
-#   FIREWORKS_TOKEN=<fireworks API key>
 #   TELEGRAM_USERNAME=<your-telegram-username>
+#   LLM_TOKEN=<crof.ai key — default backend>
 #   TAVILY_TOKEN=<tavily key, optional, enables web_search>
+# Optional, to swap LLM provider (defaults: CrofAI + kimi-k2.6):
+#   LLM_URL=https://api.fireworks.ai/inference/v1
+#   LLM_MODEL=accounts/fireworks/models/kimi-k2p5
 
 nix run github:purplenoodlesoop/horizon
 ```
@@ -69,7 +72,9 @@ The flake bundles the templates (capabilities, system prompts, default tool allo
 |---|---|---|---|---|
 | `--telegram-token` | `TELEGRAM_TOKEN` | — | yes | Bot token from @BotFather |
 | `--telegram-username` | `TELEGRAM_USERNAME` | — | **required for any inbound traffic** | Single Telegram user the bot will accept messages from and send to. Without `@`. Empty = fail-closed (all inbound dropped, startup warns) |
-| `--fireworks-token` | `FIREWORKS_TOKEN` | — | yes | Fireworks API key for Kimi K2.5 |
+| `--llm-token` | `LLM_TOKEN` | — | yes | API key for the LLM provider (default backend is CrofAI) |
+| `--llm-url` | `LLM_URL` | `https://crof.ai/v1` | no | Base URL of an OpenAI-compatible chat completions endpoint (no trailing `/chat/completions`). Other options: `https://api.fireworks.ai/inference/v1`, `https://openrouter.ai/api/v1` |
+| `--llm-model` | `LLM_MODEL` | `kimi-k2.6` | no | Model id the provider expects. On Fireworks use `accounts/fireworks/models/kimi-k2p5`; on CrofAI also try `kimi-k2.6-precision` or `kimi-k2.5` |
 | `--tavily-token` | `TAVILY_TOKEN` | — | optional | Enables `web_search`. Without it, the tool fails when called |
 | `--vault` | — | `vault` | no | Path to the Obsidian vault |
 | `--allowlist` | `HORIZON_ALLOWLIST` | `<vault>/_horizon/system/allowlist.yaml` | no | Tool definitions YAML; override only — the harness reads from the vault by default and reloads per event |
@@ -194,7 +199,7 @@ Available capabilities — markdown files describing how to handle ...:
 [standing instructions about wikilinks, plain text replies, etc.]
 ```
 
-The user message contains the per-event volatile content (event summary + raw input). Everything in the system prompt is byte-identical across events for a given vault, so Fireworks' KV cache hits the prefix at ~70–85% on second-and-later turns.
+The user message contains the per-event volatile content (event summary + raw input). Everything in the system prompt is byte-identical across events for a given vault, so providers that do prefix/KV caching (Fireworks, OpenAI, Anthropic, etc.) hit the prefix at ~70–85% on second-and-later turns. Providers without prefix caching will re-prefill on every turn — the cost section below assumes a cache-supporting backend.
 
 The orchestrator uses `read_file` to pull capability bodies on demand. Loading a capability and acting on it are the same model call — there is no separate routing step. This is the key architectural choice; it sidesteps the misclassification ceiling of cheap-router approaches.
 
@@ -326,7 +331,7 @@ The only mechanical placeholder is `{{manifest}}`. Everything else is literal te
 
 ## Cost characteristics
 
-Empirical, on Kimi K2.5 via Fireworks ($0.60/M input, $3.00/M output as of 2026-04):
+Empirical reference numbers, taken on Kimi K2.5 via Fireworks ($0.60/M input, $3.00/M output as of 2026-04) — the previously-default setup. The current default (CrofAI + `kimi-k2.6`) hasn't been benchmarked against these figures; treat them as an order-of-magnitude guide. Other providers via `LLM_URL`/`LLM_MODEL` will differ.
 
 | Scenario | Per-event cost |
 |---|---|
@@ -335,7 +340,7 @@ Empirical, on Kimi K2.5 via Fireworks ($0.60/M input, $3.00/M output as of 2026-
 | Heartbeat with `skill-reflector` due (1 turn read journal/messages + write a proposal) | ~$0.05 |
 | Web search via Tavily | ~$0.005 incremental for the Tavily call + LLM tokens |
 
-The KV cache discipline matters: the system prompt prefix is byte-identical across events for a given vault, so Fireworks caches it. The user message holds the volatile event summary so the prefix isn't disrupted.
+The KV cache discipline matters: the system prompt prefix is byte-identical across events for a given vault, so a prefix-caching backend (Fireworks, OpenAI, etc.) caches it. The user message holds the volatile event summary so the prefix isn't disrupted. If you point `LLM_URL` at a provider that doesn't do prefix caching, expect the per-event prompt cost to multiply roughly 4×.
 
 ---
 
@@ -380,7 +385,7 @@ horizon/
 │   │   ├── turn_store.dart       # _horizon/turns/ persistence
 │   │   ├── console_logger.dart
 │   │   └── file_logger.dart
-│   ├── llm/client.dart           # Fireworks call + tool loop + usage logging
+│   ├── llm/client.dart           # OpenAI-compatible chat call + tool loop + usage logging
 │   ├── tool/
 │   │   ├── allowlist.dart        # YAML loader
 │   │   ├── executor.dart         # render + validate + bash

@@ -10,8 +10,6 @@ import "package:horizon/src/tool/executor.dart";
 import "package:mark/mark.dart";
 import "package:openai_dart/openai_dart.dart";
 
-const _model = "accounts/fireworks/models/kimi-k2p5";
-const _fireworksBaseUrl = "https://api.fireworks.ai/inference/v1";
 // Idle timeout: longest allowable gap between SSE chunks. Resets on
 // every chunk. Lets long completions keep flowing as long as tokens
 // keep arriving; only fails on truly stuck connections. Prior wall-
@@ -59,13 +57,15 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
     required Logger logger,
     required String agentId,
   }) : super(() async* {
-          // Snapshot fireworks token at request start. If it rotates
-          // mid-turn the in-flight client keeps using the old one;
-          // the next event's pipeline picks up the new value.
+          // Snapshot LLM endpoint config at request start. If any of
+          // token/url/model rotates mid-turn the in-flight client
+          // keeps using the old values; the next event's pipeline
+          // picks up the new ones.
           final client = OpenAIClient.withApiKey(
-            envStore.fireworksToken,
-            baseUrl: _fireworksBaseUrl,
+            envStore.llmToken,
+            baseUrl: envStore.llmUrl,
           );
+          final model = envStore.llmModel;
           final tools = allowlist.map(_buildTool).toList();
           final messages = <ChatMessage>[
             ChatMessage.system(systemPrompt),
@@ -74,6 +74,7 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
           try {
             yield* _runLoop(
               client: client,
+              model: model,
               messages: messages,
               tools: tools,
               allowlist: allowlist,
@@ -213,6 +214,7 @@ Stream<AgentEvent> _streamCycle({
 
 Stream<AgentEvent> _runLoop({
   required OpenAIClient client,
+  required String model,
   required List<ChatMessage> messages,
   required List<Tool> tools,
   required IList<AllowlistedTool> allowlist,
@@ -241,7 +243,7 @@ Stream<AgentEvent> _runLoop({
     yield* _streamCycle(
       client: client,
       request: ChatCompletionCreateRequest(
-        model: _model,
+        model: model,
         messages: current,
         tools: tools,
       ),
