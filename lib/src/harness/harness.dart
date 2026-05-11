@@ -13,6 +13,7 @@ import "package:horizon/src/channel/cli.dart";
 import "package:horizon/src/channel/reply.dart";
 import "package:horizon/src/channel/telegram.dart";
 import "package:horizon/src/channel/telegram_admin.dart";
+import "package:horizon/src/channel/telegram_batch.dart";
 import "package:horizon/src/config/args.dart";
 import "package:horizon/src/config/config.dart";
 import "package:horizon/src/config/env_store.dart";
@@ -100,12 +101,17 @@ Future<void> _run(
     (_) => heartbeatEvent(),
   );
 
-  if (envStore.telegramUsername.isEmpty) {
+  if (envStore.telegramUsernames.isEmpty) {
     logger.warning(
       "TELEGRAM_USERNAME is not set — Telegram inbound is FAIL-CLOSED: "
       "all messages will be dropped, including yours. Set "
-      "TELEGRAM_USERNAME in .env (without `@`) or pass "
-      "--telegram-username to allow your account.",
+      "TELEGRAM_USERNAME in .env (without `@`, comma-separated for "
+      "multiple users) or pass --telegram-username to allow accounts.",
+    );
+  } else {
+    logger.info(
+      "Telegram inbound allowlist: "
+      "${envStore.telegramUsernames.map((u) => "@$u").join(", ")}",
     );
   }
 
@@ -128,7 +134,7 @@ Future<void> _run(
     }
     telegramSub = TelegramPoller(
       botToken: envStore.telegramToken,
-      allowedUsername: envStore.telegramUsername,
+      allowedUsernames: envStore.telegramUsernames,
       vaultPath: config.vaultPath,
       logger: logger,
     ).listen(
@@ -171,7 +177,7 @@ Future<void> _run(
     logger: logger,
   ));
 
-  final events = telegramOut.stream
+  final events = batchTelegramEvents(telegramOut.stream)
       .merge(CliEvents())
       .merge(heartbeat)
       .merge(scheduleOut.stream);

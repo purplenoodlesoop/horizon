@@ -6,6 +6,7 @@ import "package:horizon/src/agent/system_prompt.dart";
 import "package:horizon/src/capability/capability.dart";
 import "package:horizon/src/config/config.dart";
 import "package:horizon/src/config/env_store.dart";
+import "package:horizon/src/event/event.dart";
 import "package:horizon/src/harness/turn_store.dart";
 import "package:horizon/src/llm/client.dart";
 import "package:horizon/src/tool/allowlist.dart";
@@ -30,6 +31,17 @@ String _renderManifest(IList<Capability> capabilities) {
 /// the system prompt above stays cacheable.
 String _buildUserMessage(String eventSummary, String eventContent) =>
     "$eventSummary\n\n[User content]\n$eventContent";
+
+final _imageMarker = RegExp(r"\[image:([^\]\s]+)\]");
+
+/// Extract vault-relative image paths from `[image:<relpath>]` markers
+/// in the event content. The Telegram poller writes one of these per
+/// inbound photo. Heartbeat / CLI / schedule events have no images.
+List<String> _extractImagePaths(String content, String vaultPath) =>
+    _imageMarker
+        .allMatches(content)
+        .map((m) => "$vaultPath/${m.group(1)}")
+        .toList(growable: false);
 
 class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
   RunCentralizedPipeline({
@@ -62,6 +74,16 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
           );
           final userMessage = _buildUserMessage(summary, event.content);
 
+          final currentChatId = switch (event.channel) {
+            TelegramChannel(:final value) => value.chatId,
+            _ => null,
+          };
+
+          final imagePaths = _extractImagePaths(
+            event.content,
+            config.vaultPath,
+          );
+
           final agent = RunAgentLlm(
             envStore: envStore,
             systemPrompt: systemPrompt,
@@ -70,6 +92,8 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
             vaultPath: config.vaultPath,
             logger: logger,
             agentId: _agentId,
+            currentTelegramChatId: currentChatId,
+            imagePaths: imagePaths,
           );
 
           await for (final ae in agent) {

@@ -18,7 +18,9 @@ final _parser = ArgParser()
   )
   ..addOption(
     "telegram-username",
-    help: "Telegram username allowed to interact (without @). The "
+    help: "Telegram username(s) allowed to interact (without @). Pass "
+        "a single username for the original single-user lockdown, or a "
+        "comma-separated list for multi-user (e.g. 'alice,bob'). The "
         "bot ignores messages from any other username and refuses to "
         "send to chat_ids that have not sent us an accepted message. "
         "Or set TELEGRAM_USERNAME in env file.",
