@@ -727,8 +727,7 @@ String _htmlEscape(String s) => s
 /// alone to avoid wrecking inline math, file paths, or code that
 /// happens to contain those characters.
 String _normalizeMarkdownToHtml(String s) => s
-    // Markdown bold → <b>. Italic with `*` / `_` is left alone —
-    // false-positive rate on code / paths is too high.
+    // Markdown bold → <b>.
     .replaceAllMapped(
       RegExp(r"\*\*([^*\n][^*]*?[^*\n]|[^*\n])\*\*"),
       (m) => "<b>${m[1]}</b>",
@@ -736,6 +735,21 @@ String _normalizeMarkdownToHtml(String s) => s
     .replaceAllMapped(
       RegExp(r"__([^_\n][^_]*?[^_\n]|[^_\n])__"),
       (m) => "<b>${m[1]}</b>",
+    )
+    // Markdown single-asterisk italic → <i>. Conservative: only
+    // converts when delimiters are clearly bounding prose — start
+    // / whitespace / opening bracket on the open side; end /
+    // whitespace / closing bracket / sentence-end punct on the
+    // close side; at least one Unicode letter inside, no asterisk
+    // and no newline. Leaves `x*y`, `arr[*p]`, and `2 * x` alone.
+    // Underscore italic (`_x_`) is NOT handled — false-positive
+    // rate on identifiers like `foo_bar` is too high.
+    .replaceAllMapped(
+      RegExp(
+        r'''(^|[\s(\[«„‹—–])\*([^*\n]*\p{L}[^*\n]*?)\*(?=[\s)\].,;:?!»"”›—–]|$)''',
+        unicode: true,
+      ),
+      (m) => "${m[1]}<i>${m[2]}</i>",
     )
     // Telegram HTML has no <br>; the standing prompt warns about
     // this, but Kimi-class models keep emitting it anyway. Convert
