@@ -21,3 +21,10 @@ build/
 
 # macOS
 .DS_Store
+
+# Cloudflare Wrangler (deploy state, npx node_modules cache)
+.wrangler/
+node_modules/
+
+# Claude Code local settings (per-machine permission grants)
+.claude/settings.local.json

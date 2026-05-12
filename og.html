@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Horizon OG</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1200px; height: 630px;
+    background: radial-gradient(circle at 70% 30%, #7c3aed 0%, #5b21b6 45%, #2e1065 100%);
+    color: #ffffff;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    overflow: hidden;
+    position: relative;
+  }
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .frame {
+    position: absolute; inset: 0;
+    padding: 64px 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .top {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    color: rgba(255,255,255,0.78);
+    font-size: 18px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .dot {
+    width: 12px; height: 12px;
+    border-radius: 999px;
+    background: #ddd6fe;
+    box-shadow: 0 0 24px 4px rgba(221,214,254,0.6);
+  }
+  .center { display: flex; flex-direction: column; gap: 22px; }
+  h1 {
+    margin: 0;
+    font-size: 132px;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    font-weight: 800;
+    color: #ffffff;
+  }
+  .tagline {
+    margin: 0;
+    font-size: 34px;
+    line-height: 1.28;
+    max-width: 900px;
+    color: rgba(255,255,255,0.92);
+    font-weight: 400;
+  }
+  .tagline em { color: #ddd6fe; font-style: normal; font-weight: 600; }
+  .bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: rgba(255,255,255,0.7);
+    font-size: 20px;
+    font-weight: 500;
+  }
+  .url { letter-spacing: 0.01em; }
+  .stamp {
+    border: 1px solid rgba(255,255,255,0.32);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 16px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: rgba(255,255,255,0.05);
+  }
+</style>
+</head>
+<body>
+<div class="grid"></div>
+<div class="frame">
+  <div class="top">
+    <span class="dot"></span>
+    <span>Horizon</span>
+  </div>
+  <div class="center">
+    <h1>Horizon</h1>
+    <p class="tagline">A personal AI assistant. <em>Designed from research, not assembled from plugins.</em></p>
+  </div>
+  <div class="bottom">
+    <span class="url">horizon.yakov.codes</span>
+    <span class="stamp">One vault · One binary · No DB</span>
+  </div>
+</div>
+</body>
+</html>

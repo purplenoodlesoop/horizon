@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Horizon — a personal AI assistant whose memory is plain markdown</title>
+<meta name="description" content="A personal AI assistant. Designed from research, not assembled from plugins. Talk to it from Telegram; edit its behavior by editing plain text.">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://horizon.yakov.codes/">
+<meta property="og:title" content="Horizon — a personal AI assistant. Designed from research, not assembled from plugins.">
+<meta property="og:description" content="Talk to it from Telegram. Edit its behavior by editing plain text. One vault, one binary, no database.">
+<meta property="og:image" content="https://horizon.yakov.codes/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Horizon — a personal AI assistant. Designed from research, not assembled from plugins.">
+<meta property="og:site_name" content="Horizon">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Horizon">
+<meta name="twitter:description" content="A personal AI assistant. Designed from research, not assembled from plugins.">
+<meta name="twitter:image" content="https://horizon.yakov.codes/og.png">
+
+<meta name="theme-color" content="#6d28d9">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236d28d9'/%3E%3Ctext x='16' y='23' font-family='-apple-system,sans-serif' font-size='22' font-weight='800' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
+
+<style>
+  :root {
+    --fg: #1d1432;
+    --muted: #5d5474;
+    --bg: #faf8ff;
+    --accent: #6d28d9;
+    --accent-hover: #5b21b6;
+    --accent-soft: #ede9fe;
+    --line: #e9e2f5;
+    --code-bg: #f0eaf9;
+    --code-fg: #2d2347;
+    --card-bg: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 64px 24px 96px; }
+  header h1 { font-size: 48px; line-height: 1.05; margin: 0 0 12px; letter-spacing: -0.02em; color: var(--accent); }
+  header .tagline { font-size: 20px; color: var(--fg); margin: 0 0 18px; font-weight: 500; }
+  .lede { font-size: 17px; color: var(--muted); margin: 0 0 24px; }
+  h2 { font-size: 24px; margin: 56px 0 12px; letter-spacing: -0.01em; color: var(--fg); }
+  h3 { font-size: 17px; margin: 24px 0 6px; color: var(--accent); }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: rgba(109,40,217,0.4); }
+  a:hover { text-decoration-color: var(--accent); }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 16px 18px;
+    overflow-x: auto;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 16px 0 24px;
+    border: 1px solid var(--line);
+  }
+  :not(pre) > code {
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    color: var(--code-fg);
+  }
+  .cta {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+    margin: 0 8px 8px 0;
+    border: 1px solid var(--accent);
+  }
+  .cta:hover { background: var(--accent-hover); border-color: var(--accent-hover); text-decoration: none; color: #fff; }
+  .cta.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .cta.secondary:hover { background: var(--accent-soft); color: var(--accent); }
+  .ctas { margin-top: 12px; margin-bottom: 8px; }
+  ul { padding-left: 22px; margin: 8px 0 16px; }
+  li { margin: 8px 0; }
+  .compare {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px 20px;
+    background: var(--card-bg);
+    margin: 12px 0;
+  }
+  .compare h3 { margin-top: 0; color: var(--fg); }
+  .research {
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 12px 0 0;
+    font-size: 15px;
+  }
+  .research p { margin: 0; }
+  .research p + p { margin-top: 10px; }
+  .research .cite { color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+  footer {
+    margin-top: 64px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Horizon</h1>
+  <p class="tagline">A personal AI assistant. Designed from research, not assembled from plugins.</p>
+  <p class="lede">Talk to it from Telegram. Edit its behavior — your todos, journal, even what it can do — by editing plain text. One vault, one binary, no database.</p>
+  <div class="ctas">
+    <a class="cta" href="https://github.com/purplenoodlesoop/horizon">View on GitHub</a>
+    <a class="cta secondary" href="https://github.com/purplenoodlesoop/horizon/blob/main/README.md">Read the docs</a>
+  </div>
+</header>
+
+<h2>What it is</h2>
+
+<p>A personal AI assistant you reach over Telegram or the CLI. Its memory — your todos, the people you know, your journal, your knowledge — lives as <code>.md</code> files in a directory you control. Even the assistant's <em>capabilities</em> are markdown files in that same directory.</p>
+
+<p>You don't configure it through a settings screen. You open a text editor, change a file, and the next message picks up the change.</p>
+
+<pre>nix run github:purplenoodlesoop/horizon</pre>
+
+<h2>It's plain markdown — not Obsidian</h2>
+
+<p>The "vault" is a directory of <code>.md</code> files with YAML frontmatter. Nothing more. Edit it with anything that touches text — vim, VS Code, Obsidian, your phone's notes app, <code>cat &gt; foo.md</code>. The harness reads files; it doesn't care which editor wrote them. No Obsidian SDK, no plugin, no integration — just files.</p>
+
+<h2>Why not just ChatGPT or Gemini?</h2>
+
+<p>Horizon isn't a competitor to the model — it <em>uses</em> a model (Kimi K2.6 on CrofAI by default, any OpenAI-compatible endpoint works). It adds what chat apps deliberately don't do:</p>
+
+<ul>
+  <li><strong>Memory in a form you own.</strong> Every message and turn is a markdown file. <code>grep</code> it, edit it, git-version it. No opaque "memory feature."</li>
+  <li><strong>It can act on its own.</strong> Capabilities and scheduled jobs fire on a heartbeat. The bot can message you first.</li>
+  <li><strong>Tools you control.</strong> Adding a tool is six lines of YAML. <code>curl</code> + <code>jq</code> + your filesystem is the kit. No app store.</li>
+  <li><strong>One binary, any model.</strong> Swap providers in one env var. Your data never leaves your machine except as prompts.</li>
+</ul>
+
+<h2>Why not OpenClaw or Hermes?</h2>
+
+<p>OpenClaw and Hermes Agent are the closest neighbors. Horizon is a smaller, different bet:</p>
+
+<div class="compare">
+  <h3>State = plain markdown, not a database</h3>
+  <p>Hermes uses SQLite. OpenClaw uses an opinionated workspace with injected prompt files. Horizon has neither — capabilities, messages, turns, schedules, audit log are all <code>.md</code> in whatever directory you pointed <code>--vault</code> at.</p>
+</div>
+
+<div class="compare">
+  <h3>Tools = bash templates, not MCP or plugins</h3>
+  <p>One YAML entry, hot-reloaded per event. No server lifecycle, no plugin SDK, no marketplace. Adding a tool from your phone takes thirty seconds.</p>
+</div>
+
+<div class="compare">
+  <h3>Idle costs nothing</h3>
+  <p>The heartbeat is signal-driven. A pure-Dart filter checks which capabilities are due before any LLM call. Nothing due = zero tokens. Not "a little." Zero.</p>
+</div>
+
+<div class="compare">
+  <h3>It doesn't rewrite itself</h3>
+  <p>Hermes autonomously writes and edits its own skills. Horizon's <code>skill-reflector</code> only <em>proposes</em>. Promotion is an explicit <code>/promote &lt;id&gt;</code> from Telegram, or you move the file yourself.</p>
+</div>
+
+<h2>Backed by research</h2>
+
+<div class="research">
+  <p>The architectural choices have a paper trail:</p>
+  <p><strong>Centralized over multi-agent</strong> — Tran &amp; Kiela, <em>Single-Agent LLMs Outperform Multi-Agent Systems on Multi-Hop Reasoning Under Equal Thinking Token Budgets</em>. <span class="cite">arXiv:2604.02460</span></p>
+  <p><strong>Capabilities-as-skills</strong>, and why "semantic confusability among similar skills" is the real ceiling — Li, <em>When Single-Agent with Skills Replace Multi-Agent Systems and When They Fail</em>. <span class="cite">arXiv:2601.04748</span></p>
+  <p><strong>Filesystem-as-manifest over vector RAG</strong> — Sun et al., <em>Don't Retrieve, Navigate</em> (Corpus2Skill). <span class="cite">arXiv:2604.14572</span></p>
+  <p><strong>Signal-driven heartbeat</strong> — the <code>HEARTBEAT_OK</code> sentinel and pre-LLM filter are borrowed verbatim from OpenClaw's heartbeat doc; the same wake-gate idea is cross-checked against Hermes Agent's <code>cron/scheduler.py</code>.</p>
+</div>
+
+<h2>Try it</h2>
+
+<pre># .env in your current directory
+TELEGRAM_TOKEN=...
+TELEGRAM_USERNAME=your-handle   # or: alice,bob,carol
+LLM_TOKEN=...
+
+nix run github:purplenoodlesoop/horizon</pre>
+
+<p>First run bootstraps an empty vault with a default capability bundle. Edit anything in any markdown editor — the next message picks it up. The <a href="https://github.com/purplenoodlesoop/horizon/blob/main/README.md">README</a> covers the rest: schedules, voice memos, attachments, admin commands, security, cost.</p>
+
+<div class="ctas">
+  <a class="cta" href="https://github.com/purplenoodlesoop/horizon">View on GitHub</a>
+  <a class="cta secondary" href="https://github.com/purplenoodlesoop/horizon/blob/main/README.md">Read the docs</a>
+</div>
+
+<footer>
+  Horizon is ~5.8k lines of hand-written Dart. One vault, one binary, no database.
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Horizon
 
-A personal multi-agent assistant. Vault-resident capabilities, single-thread centralized orchestration, signal-driven heartbeat, Obsidian as state, Telegram + CLI as channels, Kimi K2.6 on CrofAI as the default LLM (any OpenAI-compatible provider works). One user, one vault, one binary.
+A personal multi-agent assistant. Vault-resident capabilities, single-thread centralized orchestration, signal-driven heartbeat, a plain-markdown directory as state (no DB), Telegram + CLI as channels, Kimi K2.6 on CrofAI as the default LLM (any OpenAI-compatible provider works). One vault, one binary, a Telegram username allowlist for inbound — you alone, or a small group you trust with the same vault.
 
 This README is the only source of documentation.
 
@@ -37,7 +37,9 @@ This README is the only source of documentation.
 
 ## What Horizon is
 
-A single-user personal assistant that lives in your Obsidian vault. You add a capability — a markdown file describing what kind of work it handles — and the orchestrator pulls it into context when relevant. The vault is the only persistent state; the harness is generic and knows nothing about people, todos, journals, or any other subtree.
+A personal assistant whose entire memory is a directory of markdown files. You reach it via Telegram (with a username allowlist) or the CLI. You add a capability — a markdown file describing what kind of work it handles — and the orchestrator pulls it into context when relevant. The vault is the only persistent state; the harness is generic and knows nothing about people, todos, journals, or any other subtree.
+
+The "vault" is just a directory passed via `--vault`. Plain `.md` files with YAML frontmatter and (by convention in the default capability bundle) `[[wikilinks]]`. No database, no Obsidian dependency, no SDK. Obsidian renders the result nicely and is a fine mobile editor — so do vim, VS Code, Foam, LogSeq, and the iOS Files app. The harness reads files; it doesn't care which editor wrote them.
 
 Three properties make this different from the other personal-assistant frameworks:
 
@@ -62,7 +64,7 @@ Three properties make this different from the other personal-assistant framework
 nix run github:purplenoodlesoop/horizon
 ```
 
-The flake bundles the templates (capabilities, system prompts, default tool allowlist) into the package, so the binary works from any directory. On first run, an empty vault is bootstrapped with the default capability set and `_horizon/system/allowlist.yaml`. After that, you edit tools and capabilities in Obsidian and the next event picks up the changes — no restart, no redeploy.
+The flake bundles the templates (capabilities, system prompts, default tool allowlist) into the package, so the binary works from any directory. On first run, an empty vault is bootstrapped with the default capability set and `_horizon/system/allowlist.yaml`. After that, you edit tools and capabilities in any markdown editor and the next event picks up the changes — no restart, no redeploy.
 
 ---
 
@@ -89,7 +91,7 @@ The Nix package sets `HORIZON_TEMPLATES` to the install-prefix path via a wrappe
 
 ## The vault
 
-The vault is plain markdown with YAML frontmatter and `[[wikilinks]]`. Open it in Obsidian; everything is human-readable.
+The vault is plain markdown with YAML frontmatter and `[[wikilinks]]`. Open it in any markdown tool — vim, VS Code, Obsidian, your phone's notes app, `cat`. Everything is human-readable; `[[wikilinks]]` are rendered by Obsidian/Foam/LogSeq but are just text to the harness.
 
 The harness reserves one subtree, `<vault>/_horizon/`, for system-managed state:
 
@@ -229,7 +231,7 @@ Default capabilities ship without `schedule:` — proactive behavior is opt-in.
 
 ## Tools
 
-Tools are bash command templates in `<vault>/_horizon/system/allowlist.yaml`. The harness renders a template with shell-escaped arguments, validates, runs through `bash -c`, and returns stdout/stderr to the orchestrator. The file is read on every event, so edits in Obsidian Mobile take effect on the next message — no restart needed. The bundled default allowlist is shipped in `templates/_horizon/system/allowlist.yaml` and copied into your vault on first run.
+Tools are bash command templates in `<vault>/_horizon/system/allowlist.yaml`. The harness renders a template with shell-escaped arguments, validates, runs through `bash -c`, and returns stdout/stderr to the orchestrator. The file is read on every event, so edits from any markdown editor on your phone take effect on the next message — no restart needed. The bundled default allowlist is shipped in `templates/_horizon/system/allowlist.yaml` and copied into your vault on first run.
 
 ### Vault I/O
 
@@ -308,12 +310,12 @@ If `TELEGRAM_USERNAME` is empty, the harness logs a startup warning and **drops 
 
 ## Security model
 
-- **Tool allowlist.** Only commands declared in `<vault>/_horizon/system/allowlist.yaml` execute. Unknown tool names return an error before bash sees anything. The vault is single-user-write by virtue of the device sync model (your Obsidian vault, your phone), so vault-resident allowlist edits sit inside the same trust boundary as capability prose.
+- **Tool allowlist.** Only commands declared in `<vault>/_horizon/system/allowlist.yaml` execute. Unknown tool names return an error before bash sees anything. The vault has one writer — you, editing in Obsidian on a device you control. Other allowlisted Telegram users can send messages, but they don't touch `allowlist.yaml`, so vault-resident allowlist edits sit inside the same trust boundary as capability prose.
 - **Path traversal.** `path`-typed parameters are checked to stay under `<vault>/`; any `..` or absolute path is refused.
 - **Shell escaping.** Every parameter value is wrapped in single quotes with embedded single quotes escaped. The orchestrator cannot inject shell metacharacters by crafting a parameter.
 - **No pipe-to-interpreter.** Rendered commands are scanned for `| sh`, `| bash`, `| python`, etc., and refused at validation time.
 - **Secret tokens via env.** `TELEGRAM_TOKEN` and `TAVILY_TOKEN` are passed to the bash subprocess as environment variables, never substituted into the rendered command. They do not appear in process listings, command logs, or tool-call debug output.
-- **Single-user Telegram lockdown.** See above.
+- **Telegram username allowlist.** See above.
 - **No adversarial threat model.** The orchestrator (the LLM) is trusted; this is your bot acting on your vault. Validation prevents the orchestrator from accidentally writing outside the vault or hallucinating destructive commands, not from an attacker.
 
 ---
@@ -325,7 +327,7 @@ The standing prompt and the heartbeat addendum live as plain markdown:
 - `<vault>/_horizon/system/standing.md` — base prompt, with `{{manifest}}` substituted at runtime
 - `<vault>/_horizon/system/heartbeat-addendum.md` — appended in heartbeat mode
 
-Edit them in Obsidian. The next event uses the new prompt. The harness reads from the vault first, falling back to `templates/_horizon/system/` if the vault copy is missing.
+Edit them in any text editor. The next event uses the new prompt. The harness reads from the vault first, falling back to `templates/_horizon/system/` if the vault copy is missing.
 
 The only mechanical placeholder is `{{manifest}}`. Everything else is literal text.
 
@@ -348,7 +350,7 @@ The KV cache discipline matters: the system prompt prefix is byte-identical acro
 
 ## What Horizon will never be
 
-- Multi-user. The bot is locked to one Telegram username; outbound is bounded by inbound.
+- Multi-tenant. The Telegram allowlist supports more than one user, but everyone allowlisted shares the same vault. Horizon is for you (and optionally a small trusted group), not for serving strangers each with isolated data.
 - Multi-vault. One process, one vault.
 - Real-time (sub-second). Every event waits on a Kimi K2.5 round-trip.
 - An MCP host or client. Bash command templates are the equivalent and operationally superior primitive at this scale; MCP adds a wire protocol, server lifecycle, and out-of-process orchestration with no functional gain.
@@ -423,4 +425,4 @@ printf 'I am Alex Smith\nMy mother is Maria Smith\nI need to create paypal for m
   | dart run bin/horizon.dart --vault=/tmp/test-vault --heartbeat=3600
 ```
 
-The codebase is small (~1.6k lines of hand-written Dart).
+The codebase is small (~5.8k lines of hand-written Dart, excluding generated freezed code).
