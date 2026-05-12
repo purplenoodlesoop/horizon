@@ -62,6 +62,12 @@ class TelegramPoller extends StreamFx<Event> {
                 continue;
               }
               offset = updateId + 1;
+              // Defence: per-update handlers (voice transcription,
+              // file download, inline answer) call out to processes
+              // and HTTP. Any of them throwing would otherwise tear
+              // down the whole poller stream and leave the bot up
+              // but deaf. Catch broadly and drop just this update.
+              try {
               final inlineQuery = update["inline_query"];
               if (inlineQuery is Map) {
                 await _answerInlineQuery(
@@ -179,6 +185,12 @@ class TelegramPoller extends StreamFx<Event> {
               }
               // Other message kinds (sticker, location, etc.) are
               // silently dropped — phase 7+ candidates.
+              } on Object catch (e, st) {
+                logger.error(
+                  "tg poller: dropped update $updateId: $e",
+                  stackTrace: st,
+                );
+              }
             }
           } on http.ClientException {
             await Future<void>.delayed(const Duration(seconds: 5));
