@@ -17,6 +17,7 @@ class Schedule {
     required this.spec,
     required this.deliver,
     required this.createdBy,
+    required this.createdAt,
     required this.expiresAfter,
     required this.noAgent,
     required this.body,
@@ -31,6 +32,13 @@ class Schedule {
 
   /// `user` or `agent` — recorded only; affects nothing today.
   final String createdBy;
+
+  /// Wall-clock time the schedule entry was created. Used as the
+  /// implicit anchor for `IntervalSpec` schedules so a `schedule: 2h`
+  /// reminder created now fires in 2h, not on the next scheduler tick.
+  /// Falls back to file mtime when missing from frontmatter (older
+  /// entries written before the field existed).
+  final DateTime createdAt;
 
   /// Optional fire-count cap. After this many fires, the file is
   /// deleted by the scheduler. Default: 1 for one-shot, unbounded for
@@ -162,6 +170,9 @@ Schedule? _parseSchedule(File file, String vaultPath, String content) {
   final createdBy = doc["created_by"] is String
       ? doc["created_by"] as String
       : "user";
+  final createdAtRaw = doc["created_at"];
+  final createdAt = _parseCreatedAt(createdAtRaw) ??
+      file.lastModifiedSync().toUtc();
   final expiresRaw = doc["expires_after"];
   final expiresAfter = expiresRaw is int ? expiresRaw : null;
   final noAgentRaw = doc["no_agent"];
@@ -184,12 +195,23 @@ Schedule? _parseSchedule(File file, String vaultPath, String content) {
     spec: spec,
     deliver: deliver,
     createdBy: createdBy,
+    createdAt: createdAt,
     expiresAfter: expiresAfter,
     noAgent: noAgent,
     body: body,
     relativePath: relativePath,
     absolutePath: file.path,
   );
+}
+
+DateTime? _parseCreatedAt(Object? raw) {
+  if (raw is DateTime) {
+    return raw.toUtc();
+  }
+  if (raw is String) {
+    return DateTime.tryParse(raw)?.toUtc();
+  }
+  return null;
 }
 
 /// Minimum interval for `no_agent: true` schedules. Below this, the

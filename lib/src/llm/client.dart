@@ -1,5 +1,6 @@
 import "dart:async";
 import "dart:convert";
+import "dart:io";
 
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
@@ -56,6 +57,8 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
     required String vaultPath,
     required Logger logger,
     required String agentId,
+    String? currentTelegramChatId,
+    List<String> imagePaths = const [],
   }) : super(() async* {
           // Snapshot LLM endpoint config at request start. If any of
           // token/url/model rotates mid-turn the in-flight client
@@ -69,7 +72,12 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
           final tools = allowlist.map(_buildTool).toList();
           final messages = <ChatMessage>[
             ChatMessage.system(systemPrompt),
-            ChatMessage.user(userMessage),
+            _buildUserChatMessage(
+              text: userMessage,
+              imagePaths: imagePaths,
+              logger: logger,
+              agentId: agentId,
+            ),
           ];
           try {
             yield* _runLoop(
@@ -82,6 +90,7 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
               envStore: envStore,
               logger: logger,
               agentId: agentId,
+              currentTelegramChatId: currentTelegramChatId,
             );
           } finally {
             client.close();
@@ -160,7 +169,7 @@ Stream<AgentEvent> _streamCycle({
             controller.add(AgentReasoningDelta(delta));
           }
         }
-        final c = acc.content;
+        final c = _sanitizeStreamingContent(acc.content);
         if (c.length > lastContentLen) {
           final delta = c.substring(lastContentLen);
           lastContentLen = c.length;
@@ -222,6 +231,7 @@ Stream<AgentEvent> _runLoop({
   required EnvStore envStore,
   required Logger logger,
   required String agentId,
+  required String? currentTelegramChatId,
 }) async* {
   var current = messages;
   final writtenPaths = <String>[];
@@ -342,12 +352,15 @@ Stream<AgentEvent> _runLoop({
 
       final toolResults = await Future.wait([
         for (var i = 0; i < toolCalls.length; i++)
-          ExecuteTool(
+          _dispatchToolCall(
             allowlist: allowlist,
             toolName: toolCalls[i].function.name,
             toolArgs: parsedArgs[i],
             vaultPath: vaultPath,
             envStore: envStore,
+            currentTelegramChatId: currentTelegramChatId,
+            logger: logger,
+            agentId: agentId,
           ),
       ]);
 
@@ -369,7 +382,7 @@ Stream<AgentEvent> _runLoop({
     }
 
     // No tool calls — final cycle.
-    final raw = message.content?.trim() ?? "";
+    final raw = _stripThinkingTags(message.content?.trim() ?? "");
     final reasoningC = message.reasoningContent?.trim() ?? "";
     final reasoningR = message.reasoning?.trim() ?? "";
     final reasoningRaw = reasoningC.isNotEmpty ? reasoningC : reasoningR;
@@ -460,6 +473,144 @@ void _logTotals({
     "[$agentId] turn totals: requests=$requestCount "
     "prompt=$totalPrompt cached=$totalCached ($pct%) "
     "completion=$totalCompletion",
+  );
+}
+
+/// Strip `<think>…</think>` / `<thinking>…</thinking>` blocks the
+/// model sometimes emits inside content. Some open-weight reasoning
+/// models (Kimi K2.6 family) intermittently leak their thinking into
+/// the content channel instead of `reasoning_content`; this catches
+/// the structured tag form. Heuristic prose stripping is intentionally
+/// not done here — the system prompt instructs the model not to
+/// narrate, and false positives on real replies are worse than a
+/// rare leak.
+final _thinkingBlockRe = RegExp(
+  r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>",
+  caseSensitive: false,
+);
+
+final _thinkingOpenRe = RegExp(
+  r"<think(?:ing)?>",
+  caseSensitive: false,
+);
+
+String _stripThinkingTags(String text) {
+  if (text.isEmpty) {
+    return text;
+  }
+  return text.replaceAll(_thinkingBlockRe, "").trim();
+}
+
+/// Sanitize accumulated streaming content: strip complete
+/// `<think>…</think>` blocks and, if an opening `<think>` has no
+/// matching close yet (the model is mid-thought), truncate the
+/// returned content at that point so the user never sees a partial
+/// thinking block in the live preview.
+String _sanitizeStreamingContent(String accContent) {
+  if (accContent.isEmpty) {
+    return accContent;
+  }
+  final stripped = accContent.replaceAll(_thinkingBlockRe, "");
+  final openMatch = _thinkingOpenRe.firstMatch(stripped);
+  if (openMatch == null) {
+    return stripped;
+  }
+  return stripped.substring(0, openMatch.start);
+}
+
+/// Construct the user message: plain text when no images are
+/// attached (keeps the simpler string path for the common case), or a
+/// multimodal `ContentPart` list when one or more `[image:…]` markers
+/// landed in the event content. Missing/unreadable files are logged
+/// and skipped — the model still gets the text marker, just not the
+/// pixels.
+ChatMessage _buildUserChatMessage({
+  required String text,
+  required List<String> imagePaths,
+  required Logger logger,
+  required String agentId,
+}) {
+  if (imagePaths.isEmpty) {
+    return ChatMessage.user(text);
+  }
+  final parts = <ContentPart>[ContentPart.text(text)];
+  for (final path in imagePaths) {
+    final file = File(path);
+    if (!file.existsSync()) {
+      logger.warning(
+        "[$agentId] image attachment missing on disk, skipping: $path",
+      );
+      continue;
+    }
+    try {
+      final bytes = file.readAsBytesSync();
+      final b64 = base64Encode(bytes);
+      parts.add(ContentPart.imageBase64(
+        mediaType: _mediaTypeFor(path),
+        data: b64,
+      ));
+    } on Object catch (e) {
+      logger.warning(
+        "[$agentId] failed to read image $path: $e",
+      );
+    }
+  }
+  if (parts.length == 1) {
+    return ChatMessage.user(text);
+  }
+  return ChatMessage.user(parts);
+}
+
+String _mediaTypeFor(String path) {
+  final lower = path.toLowerCase();
+  if (lower.endsWith(".png")) {
+    return "image/png";
+  }
+  if (lower.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+  return "image/jpeg";
+}
+
+/// Wraps ExecuteTool with a same-conversation guard for `send_telegram`.
+/// When the LLM is responding to a telegram event, it sees its final
+/// content delivered to that chat automatically; if it ALSO calls
+/// `send_telegram` targeting the same chat_id, the user sees a
+/// duplicate. Refuse the call with an error message the model will
+/// read on its next turn, instead of executing it.
+Future<String> _dispatchToolCall({
+  required IList<AllowlistedTool> allowlist,
+  required String toolName,
+  required IMap<String, String> toolArgs,
+  required String vaultPath,
+  required EnvStore envStore,
+  required String? currentTelegramChatId,
+  required Logger logger,
+  required String agentId,
+}) async {
+  if (toolName == "send_telegram" &&
+      currentTelegramChatId != null &&
+      toolArgs["chat_id"] == currentTelegramChatId) {
+    logger.warning(
+      "[$agentId] Refused self-targeting send_telegram to chat "
+      "$currentTelegramChatId — your reply is already delivered "
+      "to this chat via the final assistant message.",
+    );
+    return "Error: refusing to send_telegram to the chat you are "
+        "currently replying in (chat_id=$currentTelegramChatId). Your "
+        "final assistant message is already delivered to this chat — "
+        "calling send_telegram here produces a duplicate. Use "
+        "send_telegram only for OTHER chats.";
+  }
+  return ExecuteTool(
+    allowlist: allowlist,
+    toolName: toolName,
+    toolArgs: toolArgs,
+    vaultPath: vaultPath,
+    envStore: envStore,
   );
 }
 

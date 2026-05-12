@@ -89,18 +89,28 @@ class TranscribeWithWhisper extends Fx<String?> {
               "voice: model $modelName not cached, downloading via "
               "whisper-cpp-download-ggml-model (first run only)…",
             );
-            final dl = await Process.run(
-              "whisper-cpp-download-ggml-model",
-              [modelName, cacheDir.path],
-            );
-            if (dl.exitCode != 0 || !File(modelPath).existsSync()) {
+            try {
+              final dl = await Process.run(
+                "whisper-cpp-download-ggml-model",
+                [modelName, cacheDir.path],
+              );
+              if (dl.exitCode != 0 || !File(modelPath).existsSync()) {
+                logger.error(
+                  "voice: model download failed (exit=${dl.exitCode}): "
+                  "${dl.stderr}",
+                );
+                return null;
+              }
+              logger.info("voice: model cached at $modelPath");
+            } on ProcessException catch (e) {
               logger.error(
-                "voice: model download failed (exit=${dl.exitCode}): "
-                "${dl.stderr}",
+                "voice: whisper-cpp-download-ggml-model not available "
+                "(${e.message}). Install it (e.g. via the Nix wrapper) "
+                "or set HORIZON_WHISPER_MODEL to a model you've already "
+                "downloaded under ~/.cache/horizon/whisper.",
               );
               return null;
             }
-            logger.info("voice: model cached at $modelPath");
           }
           final outDir =
               Directory.systemTemp.createTempSync("horizon_whisper_");
@@ -109,20 +119,29 @@ class TranscribeWithWhisper extends Fx<String?> {
             // memos are OGG/Opus. Convert via ffmpeg first, since
             // the nixpkgs whisper-cpp build doesn't link ffmpeg in.
             final wavPath = "${outDir.path}/audio.wav";
-            final convert = await Process.run("ffmpeg", [
-              "-y",
-              "-loglevel",
-              "error",
-              "-i",
-              audioPath,
-              "-ar",
-              "16000",
-              "-ac",
-              "1",
-              "-c:a",
-              "pcm_s16le",
-              wavPath,
-            ]);
+            final ProcessResult convert;
+            try {
+              convert = await Process.run("ffmpeg", [
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                audioPath,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                wavPath,
+              ]);
+            } on ProcessException catch (e) {
+              logger.error(
+                "voice: ffmpeg not available (${e.message}). Install "
+                "ffmpeg or run via the Nix wrapper.",
+              );
+              return null;
+            }
             if (convert.exitCode != 0 || !File(wavPath).existsSync()) {
               logger.warning(
                 "ffmpeg exit=${convert.exitCode}: ${convert.stderr}",
@@ -131,18 +150,27 @@ class TranscribeWithWhisper extends Fx<String?> {
             }
             // whisper-cli writes <out_prefix>.txt next to the prefix.
             final outPrefix = "${outDir.path}/transcript";
-            final result = await Process.run("whisper-cli", [
-              "-m",
-              modelPath,
-              "-f",
-              wavPath,
-              "--output-txt",
-              "--output-file",
-              outPrefix,
-              "--language",
-              "auto",
-              "--no-prints",
-            ]);
+            final ProcessResult result;
+            try {
+              result = await Process.run("whisper-cli", [
+                "-m",
+                modelPath,
+                "-f",
+                wavPath,
+                "--output-txt",
+                "--output-file",
+                outPrefix,
+                "--language",
+                "auto",
+                "--no-prints",
+              ]);
+            } on ProcessException catch (e) {
+              logger.error(
+                "voice: whisper-cli not available (${e.message}). "
+                "Install whisper-cpp or run via the Nix wrapper.",
+              );
+              return null;
+            }
             if (result.exitCode != 0) {
               logger.warning(
                 "whisper-cli exit=${result.exitCode}: ${result.stderr}",

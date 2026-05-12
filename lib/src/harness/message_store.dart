@@ -22,6 +22,7 @@ String? _telegramChatId(Channel<Object?> channel) => switch (channel) {
   TelegramChannel(:final value) => value.chatId,
   CliChannel() => null,
   ScheduleChannel() => null,
+  InlineChannel() => null,
 };
 
 String _renderInbound(Event event) {

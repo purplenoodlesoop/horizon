@@ -13,6 +13,7 @@ import "package:horizon/src/channel/cli.dart";
 import "package:horizon/src/channel/reply.dart";
 import "package:horizon/src/channel/telegram.dart";
 import "package:horizon/src/channel/telegram_admin.dart";
+import "package:horizon/src/channel/telegram_batch.dart";
 import "package:horizon/src/config/args.dart";
 import "package:horizon/src/config/config.dart";
 import "package:horizon/src/config/env_store.dart";
@@ -100,12 +101,17 @@ Future<void> _run(
     (_) => heartbeatEvent(),
   );
 
-  if (envStore.telegramUsername.isEmpty) {
+  if (envStore.telegramUsernames.isEmpty) {
     logger.warning(
       "TELEGRAM_USERNAME is not set — Telegram inbound is FAIL-CLOSED: "
       "all messages will be dropped, including yours. Set "
-      "TELEGRAM_USERNAME in .env (without `@`) or pass "
-      "--telegram-username to allow your account.",
+      "TELEGRAM_USERNAME in .env (without `@`, comma-separated for "
+      "multiple users) or pass --telegram-username to allow accounts.",
+    );
+  } else {
+    logger.info(
+      "Telegram inbound allowlist: "
+      "${envStore.telegramUsernames.map((u) => "@$u").join(", ")}",
     );
   }
 
@@ -128,7 +134,7 @@ Future<void> _run(
     }
     telegramSub = TelegramPoller(
       botToken: envStore.telegramToken,
-      allowedUsername: envStore.telegramUsername,
+      allowedUsernames: envStore.telegramUsernames,
       vaultPath: config.vaultPath,
       logger: logger,
     ).listen(
@@ -171,7 +177,7 @@ Future<void> _run(
     logger: logger,
   ));
 
-  final events = telegramOut.stream
+  final events = batchTelegramEvents(telegramOut.stream)
       .merge(CliEvents())
       .merge(heartbeat)
       .merge(scheduleOut.stream);
@@ -408,7 +414,16 @@ Future<void> _processEvent({
           }
         case PipelineReply(:final text):
           if (text != null) {
-            final timed = _withTiming(text, stopwatch.elapsed, event.channel);
+            final normalized =
+                event.channel is TelegramChannel ||
+                        event.channel is InlineChannel
+                    ? _normalizeMarkdownToHtml(text)
+                    : text;
+            final timed = _withTiming(
+              normalized,
+              stopwatch.elapsed,
+              event.channel,
+            );
             replies.add(timed);
             if (isAgent) {
               _logJson({"type": "agent_reply", "text": timed});
@@ -434,6 +449,24 @@ Future<void> _processEvent({
                 telegramToken: envStore.telegramToken,
               );
               logger.info("[reply] $timed");
+            } else if (ch is InlineChannel) {
+              // Inline mode: bot edits the placeholder article it
+              // posted on chosen_inline_result with the final reply.
+              // No live streaming (we'd need a separate edit-by-
+              // inline_message_id path) — a single post-LLM edit is
+              // enough. Prepend the original query as a blockquote
+              // so the conversation isn't lost once the placeholder
+              // is overwritten (the user typed it inline; without
+              // this prefix only the answer would remain).
+              final quoted = "<blockquote>"
+                  "${_htmlEscape(event.content)}</blockquote>\n\n"
+                  "$timed";
+              await SendReply(
+                channel: ch,
+                text: quoted,
+                telegramToken: envStore.telegramToken,
+              );
+              logger.info("[reply] $quoted");
             } else if (streamedAnyText) {
               // CLI human mode: tokens already in stdout, just
               // append the timing footer.
@@ -680,6 +713,36 @@ void _logBlue(String message) {
 /// body has already been streamed to stdout.
 String _trailingFooter(String suffix) => suffix.trim();
 
+String _htmlEscape(String s) => s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+
+/// Best-effort Markdown → Telegram-HTML normalization. The standing
+/// prompt instructs the model to emit Telegram HTML, but Kimi-class
+/// models still slip into Markdown (`**bold**`, `__bold__`) habitually.
+/// Telegram renders the raw asterisks as ugly noise, so we
+/// post-process the most common offenders here. Only well-formed
+/// pairs are converted; single asterisks and underscores are left
+/// alone to avoid wrecking inline math, file paths, or code that
+/// happens to contain those characters.
+String _normalizeMarkdownToHtml(String s) => s
+    // Markdown bold → <b>. Italic with `*` / `_` is left alone —
+    // false-positive rate on code / paths is too high.
+    .replaceAllMapped(
+      RegExp(r"\*\*([^*\n][^*]*?[^*\n]|[^*\n])\*\*"),
+      (m) => "<b>${m[1]}</b>",
+    )
+    .replaceAllMapped(
+      RegExp(r"__([^_\n][^_]*?[^_\n]|[^_\n])__"),
+      (m) => "<b>${m[1]}</b>",
+    )
+    // Telegram HTML has no <br>; the standing prompt warns about
+    // this, but Kimi-class models keep emitting it anyway. Convert
+    // to a real newline so the message renders cleanly instead of
+    // falling back to plain text via the editMessageText 400 path.
+    .replaceAll(RegExp(r"<br\s*/?>", caseSensitive: false), "\n");
+
 String _briefArgs(IMap<String, String> args) {
   if (args.isEmpty) {
     return "";
@@ -706,5 +769,6 @@ String _withTiming(
     TelegramChannel() => "$text\n\n<i>— $formatted</i>",
     CliChannel() => "$text\n\n— $formatted",
     ScheduleChannel() => "$text\n\n— $formatted",
+    InlineChannel() => "$text\n\n<i>— $formatted</i>",
   };
 }

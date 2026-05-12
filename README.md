@@ -25,7 +25,7 @@ This README is the only source of documentation.
   - [Adding a tool](#adding-a-tool)
 - [Channels](#channels)
   - [CLI](#cli)
-  - [Telegram (single-user lockdown)](#telegram-single-user-lockdown)
+  - [Telegram (username allowlist)](#telegram-username-allowlist)
 - [Security model](#security-model)
 - [System prompt tuning](#system-prompt-tuning)
 - [Cost characteristics](#cost-characteristics)
@@ -71,7 +71,7 @@ The flake bundles the templates (capabilities, system prompts, default tool allo
 | Flag | Env var | Default | Required | Notes |
 |---|---|---|---|---|
 | `--telegram-token` | `TELEGRAM_TOKEN` | — | yes | Bot token from @BotFather |
-| `--telegram-username` | `TELEGRAM_USERNAME` | — | **required for any inbound traffic** | Single Telegram user the bot will accept messages from and send to. Without `@`. Empty = fail-closed (all inbound dropped, startup warns) |
+| `--telegram-username` | `TELEGRAM_USERNAME` | — | **required for any inbound traffic** | Telegram username(s) the bot accepts messages from. Without `@`. Single value for original single-user mode, or comma/space-separated list for multi-user (`alice,bob`). Empty = fail-closed (all inbound dropped, startup warns) |
 | `--llm-token` | `LLM_TOKEN` | — | yes | API key for the LLM provider (default backend is CrofAI) |
 | `--llm-url` | `LLM_URL` | `https://crof.ai/v1` | no | Base URL of an OpenAI-compatible chat completions endpoint (no trailing `/chat/completions`). Other options: `https://api.fireworks.ai/inference/v1`, `https://openrouter.ai/api/v1` |
 | `--llm-model` | `LLM_MODEL` | `kimi-k2.6` | no | Model id the provider expects. On Fireworks use `accounts/fireworks/models/kimi-k2p5`; on CrofAI also try `kimi-k2.6-precision` or `kimi-k2.5` |
@@ -291,16 +291,18 @@ Custom param types currently recognized:
 
 `dart run bin/horizon.dart` reads stdin line-by-line. Each non-empty line becomes an event. Replies print to stdout in `human` mode, JSON in `agent` mode. Useful for piping scripts and for use under Claude Code.
 
-### Telegram (single-user lockdown)
+### Telegram (username allowlist)
 
-The Telegram bot is **single-user** by design. Set `TELEGRAM_USERNAME=<your_username>` (without `@`) in `.env`. The harness then enforces:
+The Telegram bot accepts inbound only from an explicit username allowlist. Set `TELEGRAM_USERNAME=<your_username>` for a single user, or a comma/space-separated list (`TELEGRAM_USERNAME=alice,bob`) for multi-user. All entries are stripped of an optional leading `@` and compared case-insensitively. The harness enforces:
 
-- **Inbound**: `TelegramPoller` drops every update where `message.from.username` does not match (case-insensitive). Other users' messages are silently discarded.
+- **Inbound**: `TelegramPoller` drops every update where `message.from.username` is not in the allowlist. Other users' messages are silently discarded.
 - **Outbound**: the `send_telegram` tool's `chat_id` parameter has type `telegram_chat_id`. The executor rejects any chat_id that has not previously sent the bot an accepted message. The set of allowed chat_ids is derived live from `_horizon/messages/` frontmatter.
+- **Same-chat duplicate guard**: when the orchestrator is currently replying inside a Telegram chat, calling `send_telegram` with that same `chat_id` is refused with an error (the final assistant message already lands in that chat — calling `send_telegram` would produce a duplicate).
+- **Inline / guest mode**: non-allowlisted users who invoke the bot inline (`@yourbot foo`) get a single canned "this bot is private" article. Allowlisted users get an "Ask Horizon" article carrying their query; tapping it posts a "Working on: …" placeholder in the current chat, fires the full orchestrator on the query, and the placeholder is edited in place with the LLM answer (via `editMessageText` keyed on `inline_message_id`). Inline mode requires the article to ship with `reply_markup` so Telegram returns an `inline_message_id` in `chosen_inline_result` — without it, the bot would lose the handle to edit. Enable inline mode for your bot in BotFather (`/setinline`) for the inbound updates to start arriving.
 
-Net effect: you must DM the bot at least once to "register" your chat_id; afterward, capabilities can push proactively to that chat. The bot will never accept or send outside that pair.
+Net effect: each allowed user must DM the bot at least once to "register" their chat_id; afterward, capabilities can push proactively to that chat. The bot will never accept or send outside the registered allowlist.
 
-If `TELEGRAM_USERNAME` is empty, the harness logs a startup warning and **drops every inbound message** (fail-closed). The bot is single-user by design; an unset username is treated as a misconfiguration, never as "allow everyone."
+If `TELEGRAM_USERNAME` is empty, the harness logs a startup warning and **drops every inbound message** (fail-closed). An unset username is treated as a misconfiguration, never as "allow everyone."
 
 ---
 

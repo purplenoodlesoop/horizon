@@ -85,10 +85,15 @@ class ExecuteTool extends Fx<String> {
           // Pass secret tokens via environment variables, not via
           // command-line substitution — keeps them out of process
           // listings and the rendered template string.
+          // stdoutEncoding: null returns raw bytes so we can recover
+          // gracefully from binary output (e.g. `cat` on a PDF). With
+          // any encoding here (defaults to systemEncoding == utf8), a
+          // single non-UTF-8 byte raises FormatException out of
+          // Process.run and tears down the pipeline.
           final result = await Process.run(
             "bash",
             ["-c", rendered],
-            stdoutEncoding: utf8,
+            stdoutEncoding: null,
             stderrEncoding: utf8,
             environment: {
               ...Platform.environment,
@@ -99,8 +104,21 @@ class ExecuteTool extends Fx<String> {
           );
           final out = result.stdout;
           final err = result.stderr;
-          final outStr = out is String ? out : "";
           final errStr = err is String ? err : "";
+          String outStr;
+          if (out is List<int>) {
+            try {
+              outStr = utf8.decode(out);
+            } on FormatException {
+              outStr = "(binary output: ${out.length} bytes — this tool's "
+                  "output is not UTF-8 text. For binary files like PDFs "
+                  "or images use a tool that converts them to text first.)";
+            }
+          } else if (out is String) {
+            outStr = out;
+          } else {
+            outStr = "";
+          }
           if (result.exitCode != 0 && errStr.isNotEmpty) {
             return "Error (exit ${result.exitCode}): $errStr";
           }

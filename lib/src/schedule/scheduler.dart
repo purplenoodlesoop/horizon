@@ -54,7 +54,7 @@ class Scheduler {
     final fires = <ScheduleFire>[];
     for (final s in schedules) {
       final lastFire = _readLastFire(s.id);
-      if (!_isDue(s.spec, lastFire, now)) {
+      if (!_isDue(s.spec, lastFire, s.createdAt, now)) {
         continue;
       }
       fires.add(ScheduleFire(schedule: s, firedAt: now));
@@ -77,10 +77,22 @@ class Scheduler {
     }
   }
 
-  bool _isDue(ScheduleSpec spec, DateTime? lastFire, DateTime now) =>
+  /// IntervalSpec is anchored on `createdAt` for its first fire so a
+  /// `schedule: 2h` reminder created now fires in 2h, not on the next
+  /// scheduler tick. Subsequent fires anchor on the previous fire as
+  /// usual. This is the difference between "remind me in 2h" (correct)
+  /// and "fire 2h-cadence reminders starting immediately" (the old
+  /// behaviour, which surprised users who typed natural-language
+  /// durations into `schedule_reminder`).
+  bool _isDue(
+    ScheduleSpec spec,
+    DateTime? lastFire,
+    DateTime createdAt,
+    DateTime now,
+  ) =>
       switch (spec) {
-        IntervalSpec(:final duration) => lastFire == null ||
-            now.difference(lastFire) >= duration,
+        IntervalSpec(:final duration) =>
+            now.difference(lastFire ?? createdAt) >= duration,
         OneShotSpec(:final fireAt) =>
             lastFire == null && !now.isBefore(fireAt),
         CronSpec(:final expr) => _cronDue(expr, lastFire, now),

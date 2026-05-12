@@ -44,10 +44,32 @@ class EnvStore {
 
   String get tavilyToken => get("TAVILY_TOKEN");
 
-  /// Username with optional leading `@` stripped, lowercased.
-  String get telegramUsername => get("TELEGRAM_USERNAME")
-      .replaceFirst(RegExp(r"^@"), "")
-      .toLowerCase();
+  /// Set of allowed Telegram usernames (each with optional leading
+  /// `@` stripped and lowercased). `TELEGRAM_USERNAME` may be a
+  /// single username or a comma- / whitespace-separated list, so
+  /// existing single-user configs keep working.
+  ///
+  /// Empty set means fail-closed: inbound is dropped, outbound is
+  /// bounded to chat_ids that have already DM'd the bot.
+  Set<String> get telegramUsernames {
+    final raw = get("TELEGRAM_USERNAME");
+    if (raw.isEmpty) {
+      return const {};
+    }
+    return raw
+        .split(RegExp(r"[,\s]+"))
+        .map((u) => u.trim().replaceFirst(RegExp(r"^@"), "").toLowerCase())
+        .where((u) => u.isNotEmpty)
+        .toSet();
+  }
+
+  /// Backward-compat shim — empty when no usernames configured,
+  /// otherwise the first configured username (mostly useful for log
+  /// lines that want a single value).
+  String get telegramUsername {
+    final s = telegramUsernames;
+    return s.isEmpty ? "" : s.first;
+  }
 
   /// Snapshot of the current env-file map (Platform.environment is
   /// not included). Useful for passing to subprocesses.
