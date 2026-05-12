@@ -414,7 +414,16 @@ Future<void> _processEvent({
           }
         case PipelineReply(:final text):
           if (text != null) {
-            final timed = _withTiming(text, stopwatch.elapsed, event.channel);
+            final normalized =
+                event.channel is TelegramChannel ||
+                        event.channel is InlineChannel
+                    ? _normalizeMarkdownToHtml(text)
+                    : text;
+            final timed = _withTiming(
+              normalized,
+              stopwatch.elapsed,
+              event.channel,
+            );
             replies.add(timed);
             if (isAgent) {
               _logJson({"type": "agent_reply", "text": timed});
@@ -708,6 +717,31 @@ String _htmlEscape(String s) => s
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+
+/// Best-effort Markdown → Telegram-HTML normalization. The standing
+/// prompt instructs the model to emit Telegram HTML, but Kimi-class
+/// models still slip into Markdown (`**bold**`, `__bold__`) habitually.
+/// Telegram renders the raw asterisks as ugly noise, so we
+/// post-process the most common offenders here. Only well-formed
+/// pairs are converted; single asterisks and underscores are left
+/// alone to avoid wrecking inline math, file paths, or code that
+/// happens to contain those characters.
+String _normalizeMarkdownToHtml(String s) => s
+    // Markdown bold → <b>. Italic with `*` / `_` is left alone —
+    // false-positive rate on code / paths is too high.
+    .replaceAllMapped(
+      RegExp(r"\*\*([^*\n][^*]*?[^*\n]|[^*\n])\*\*"),
+      (m) => "<b>${m[1]}</b>",
+    )
+    .replaceAllMapped(
+      RegExp(r"__([^_\n][^_]*?[^_\n]|[^_\n])__"),
+      (m) => "<b>${m[1]}</b>",
+    )
+    // Telegram HTML has no <br>; the standing prompt warns about
+    // this, but Kimi-class models keep emitting it anyway. Convert
+    // to a real newline so the message renders cleanly instead of
+    // falling back to plain text via the editMessageText 400 path.
+    .replaceAll(RegExp(r"<br\s*/?>", caseSensitive: false), "\n");
 
 String _briefArgs(IMap<String, String> args) {
   if (args.isEmpty) {

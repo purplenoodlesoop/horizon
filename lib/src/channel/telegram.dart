@@ -120,6 +120,9 @@ class TelegramPoller extends StreamFx<Event> {
               final eventId = _generateId(updateId);
               final quotedContext =
                   _quotedReplyContext(message["reply_to_message"]);
+              final forwardContext = _forwardContext(message);
+              final inboundPrefix =
+                  _joinPrefixes(forwardContext, quotedContext);
               final caption = message["caption"];
               final captionStr = caption is String ? caption : null;
               final photo = message["photo"];
@@ -132,7 +135,7 @@ class TelegramPoller extends StreamFx<Event> {
                   vaultPath: vaultPath,
                   eventId: eventId,
                   logger: logger,
-                  prefix: quotedContext,
+                  prefix: inboundPrefix,
                 );
                 if (photoEvent != null) {
                   yield photoEvent;
@@ -149,7 +152,7 @@ class TelegramPoller extends StreamFx<Event> {
                   vaultPath: vaultPath,
                   eventId: eventId,
                   logger: logger,
-                  prefix: quotedContext,
+                  prefix: inboundPrefix,
                 );
                 if (docEvent != null) {
                   yield docEvent;
@@ -160,7 +163,7 @@ class TelegramPoller extends StreamFx<Event> {
               if (text is String) {
                 yield Event(
                   id: eventId,
-                  content: _withPrefix(quotedContext, text),
+                  content: _withPrefix(inboundPrefix, text),
                   channel: TelegramChannel((chatId: chatId.toString())),
                   timestamp: DateTime.now(),
                 );
@@ -176,7 +179,7 @@ class TelegramPoller extends StreamFx<Event> {
                   vaultPath: vaultPath,
                   eventId: eventId,
                   logger: logger,
-                  prefix: quotedContext,
+                  prefix: inboundPrefix,
                 );
                 if (voiceEvent != null) {
                   yield voiceEvent;
@@ -273,6 +276,105 @@ String? _quotedReplyContext(Object? replyTo) {
 
 String _withPrefix(String? prefix, String body) =>
     prefix == null ? body : "$prefix\n\n$body";
+
+/// Combine forward + quote prefixes (both optional). Both, either, or
+/// neither may be present; this avoids stacking blank-line separators
+/// when only one is set.
+String? _joinPrefixes(String? a, String? b) {
+  if (a == null) {
+    return b;
+  }
+  if (b == null) {
+    return a;
+  }
+  return "$a\n$b";
+}
+
+/// Telegram surfaces forwarded-message attribution as either the modern
+/// `forward_origin` envelope (typed `user`/`hidden_user`/`chat`/
+/// `channel`) or the legacy `forward_from` / `forward_from_chat` /
+/// `forward_sender_name` triplet. We attribute the visible message
+/// regardless: the orchestrator needs to know that the body it sees
+/// is not the user's own words.
+String? _forwardContext(Map<dynamic, dynamic> message) {
+  final origin = message["forward_origin"];
+  if (origin is Map) {
+    final attribution = _forwardOriginAttribution(origin);
+    if (attribution != null) {
+      return "[Forwarded from $attribution]";
+    }
+  }
+  final from = message["forward_from"];
+  if (from is Map) {
+    return "[Forwarded from ${_userAttribution(from)}]";
+  }
+  final fromChat = message["forward_from_chat"];
+  if (fromChat is Map) {
+    return "[Forwarded from ${_chatAttribution(fromChat)}]";
+  }
+  final senderName = message["forward_sender_name"];
+  if (senderName is String && senderName.isNotEmpty) {
+    return "[Forwarded from $senderName (hidden Telegram account)]";
+  }
+  return null;
+}
+
+String? _forwardOriginAttribution(Map<dynamic, dynamic> origin) {
+  final type = origin["type"];
+  switch (type) {
+    case "user":
+      final user = origin["sender_user"];
+      return user is Map ? _userAttribution(user) : null;
+    case "hidden_user":
+      final name = origin["sender_user_name"];
+      return name is String && name.isNotEmpty
+          ? "$name (hidden Telegram account)"
+          : null;
+    case "chat":
+      final chat = origin["sender_chat"];
+      return chat is Map ? _chatAttribution(chat) : null;
+    case "channel":
+      final chat = origin["chat"];
+      final sig = origin["author_signature"];
+      final base = chat is Map ? _chatAttribution(chat) : null;
+      if (base == null) {
+        return null;
+      }
+      if (sig is String && sig.isNotEmpty) {
+        return "$base (signed: $sig)";
+      }
+      return base;
+    default:
+      return null;
+  }
+}
+
+String _userAttribution(Map<dynamic, dynamic> user) {
+  final username = user["username"];
+  if (username is String && username.isNotEmpty) {
+    return "@$username";
+  }
+  final first = user["first_name"];
+  final last = user["last_name"];
+  final parts = <String>[
+    if (first is String && first.isNotEmpty) first,
+    if (last is String && last.isNotEmpty) last,
+  ];
+  return parts.isEmpty ? "another user" : parts.join(" ");
+}
+
+String _chatAttribution(Map<dynamic, dynamic> chat) {
+  final title = chat["title"];
+  if (title is String && title.isNotEmpty) {
+    final type = chat["type"];
+    return type is String ? '$type "$title"' : 'chat "$title"';
+  }
+  final username = chat["username"];
+  if (username is String && username.isNotEmpty) {
+    return "@$username";
+  }
+  return "another chat";
+}
 
 const _photosSubdir = "_horizon/messages/photos";
 const _filesSubdir = "_horizon/messages/files";

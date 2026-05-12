@@ -142,6 +142,14 @@ tools:
     description: "List active schedule entries. Returns id + schedule field for each. Use when the user asks 'what reminders do I have' or 'what's scheduled'."
     command: "find {vault_path}/_horizon/schedules -maxdepth 1 -name '*.md' -type f 2>/dev/null | sort | while read f; do id=$(basename \"$f\" .md); sched=$(awk '/^schedule:/ {sub(/^schedule: */, \"\"); print; exit}' \"$f\"); echo \"$id  $sched\"; done"
 
+  - name: extract_pdf
+    description: "Extract plain text from a PDF file in the vault using pdftotext. Use this whenever the user sends a PDF (event content shows `[file:...pdf mime=application/pdf]`) — read_file just returns raw bytes for binary formats. Preserves layout reasonably for tables/columns. Note: works only for PDFs with a text layer; pure-image (scanned) PDFs return empty output."
+    parameters:
+      path:
+        type: path
+        description: Relative path within the vault to the PDF file (typically `_horizon/messages/files/<event_id>-<name>.pdf`).
+    command: "pdftotext -layout {vault_path}/{path} -"
+
   - name: send_telegram
     description: Send a message proactively to a Telegram chat. Use when something the user should know about happens outside an active conversation - a scheduled reminder firing, a pattern noticed, a deadline approaching. To find a chat_id, look at recent inbound messages in _horizon/messages/ - their frontmatter has chat_id when channel is telegram. The harness rejects any chat_id that has not previously sent us an accepted message. Do not send without a real reason; the user will lose trust if you spam.
     parameters:

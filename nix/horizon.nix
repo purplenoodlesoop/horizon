@@ -8,6 +8,7 @@
   jq,
   whisper-cpp,
   ffmpeg,
+  poppler-utils,
 }:
 let
   # buildDartApplication needs pubspec.lock as parsed Nix data.
@@ -51,8 +52,8 @@ buildDartApplication {
 
   # Wrap during fixupPhase, after install/chmod is settled. Sets
   # HORIZON_TEMPLATES so the binary finds the bundled bootstrap
-  # source regardless of cwd, and puts curl/jq/whisper-cpp/ffmpeg on
-  # PATH for the bash tool templates that need them.
+  # source regardless of cwd, and puts curl/jq/whisper-cpp/ffmpeg/
+  # pdftotext on PATH for the bash tool templates that need them.
   postFixup = ''
     wrapProgram $out/bin/horizon \
       --set-default HORIZON_TEMPLATES $out/share/horizon/templates \
@@ -62,6 +63,7 @@ buildDartApplication {
           jq
           whisper-cpp
           ffmpeg
+          poppler-utils
         ]
       }
   '';

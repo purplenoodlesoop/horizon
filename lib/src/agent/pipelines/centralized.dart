@@ -37,6 +37,27 @@ final _imageMarker = RegExp(r"\[image:([^\]\s]+)\]");
 /// Extract vault-relative image paths from `[image:<relpath>]` markers
 /// in the event content. The Telegram poller writes one of these per
 /// inbound photo. Heartbeat / CLI / schedule events have no images.
+final _scheduleTelegramDeliver = RegExp(r"^telegram\(\s*([^)]+)\s*\)$");
+
+/// Resolve the "current Telegram chat" the orchestrator is implicitly
+/// replying to. For `TelegramChannel` it's the inbound chat. For
+/// `ScheduleChannel` it's the chat the schedule is configured to
+/// deliver into (parsed from the `deliver:` tag) — same dedup rule:
+/// the harness already routes the final reply to that chat, so the
+/// LLM must not call `send_telegram` to it too.
+String? _currentChatIdFor(Channel<Object?> channel) {
+  switch (channel) {
+    case TelegramChannel(:final value):
+      return value.chatId;
+    case ScheduleChannel(:final value):
+      final m = _scheduleTelegramDeliver.firstMatch(value.deliver);
+      return m?.group(1)?.trim();
+    case CliChannel():
+    case InlineChannel():
+      return null;
+  }
+}
+
 List<String> _extractImagePaths(String content, String vaultPath) =>
     _imageMarker
         .allMatches(content)
@@ -74,10 +95,7 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
           );
           final userMessage = _buildUserMessage(summary, event.content);
 
-          final currentChatId = switch (event.channel) {
-            TelegramChannel(:final value) => value.chatId,
-            _ => null,
-          };
+          final currentChatId = _currentChatIdFor(event.channel);
 
           final imagePaths = _extractImagePaths(
             event.content,
