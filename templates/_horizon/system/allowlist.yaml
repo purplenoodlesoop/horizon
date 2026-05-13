@@ -158,6 +158,6 @@ tools:
         description: Telegram chat_id of the user. Must be a chat_id that has previously sent the bot an accepted message (i.e. present in _horizon/messages/ frontmatter). The harness validates this and rejects unknown chat_ids.
       text:
         type: string
-        description: Plain-text message body, max ~4000 characters per Telegram limit.
-    command: "curl -sS --max-time 15 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage\" --data-urlencode chat_id={chat_id} --data-urlencode text={text}"
+        description: "Telegram-flavored HTML body, max ~4000 characters. Supported tags: <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">. Escape literal < > & as &lt; &gt; &amp; — Telegram returns HTTP 400 on invalid HTML. Do NOT use Markdown (**bold**, *italic*, `code`); those will render as literal characters."
+    command: "curl -sS --max-time 15 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage\" --data-urlencode chat_id={chat_id} --data-urlencode text={text} --data-urlencode parse_mode=HTML"
 

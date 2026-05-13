@@ -45,9 +45,12 @@ Future<void> _editInlineMessage({
   required String inlineMessageId,
   required String text,
 }) async {
+  final normalized = normalizeMarkdownToTelegramHtml(text);
   // Telegram caps message text at 4096 chars; editInlineMessageText
   // rejects longer payloads with a 400.
-  final body = text.length > 4096 ? "${text.substring(0, 4095)}…" : text;
+  final body = normalized.length > 4096
+      ? "${normalized.substring(0, 4095)}…"
+      : normalized;
   // Clear the "Thinking…" placeholder button by passing an empty
   // inline_keyboard. The button was load-bearing for getting
   // inline_message_id back on chosen_inline_result; it has no use
@@ -126,7 +129,7 @@ Future<void> _sendTelegram({
   );
   await http.post(uri, body: {
     "chat_id": chatId,
-    "text": text,
+    "text": normalizeMarkdownToTelegramHtml(text),
     // The standing prompt instructs the orchestrator to format
     // Telegram replies as Telegram-flavoured HTML. Markdown is
     // never sent here intentionally; if the model emits
@@ -135,6 +138,31 @@ Future<void> _sendTelegram({
     "parse_mode": "HTML",
   });
 }
+
+final _mdCodeSpan = RegExp(r"`([^`\n]+?)`");
+final _mdBold = RegExp(r"\*\*([^\n*]+?)\*\*");
+
+/// Defensive converter for the auto-reply path: the standing prompt
+/// tells the model to emit Telegram-HTML, but it sometimes leaks
+/// Markdown `**bold**` / `` `code` `` patterns into replies, which
+/// Telegram then renders as literal asterisks/backticks under
+/// `parse_mode=HTML`. We rewrite the obvious cases before send.
+///
+/// Conservative on purpose: only paired delimiters on a single line
+/// (`** … **`, `` ` … ` ``). Unpaired markers, multi-line spans, and
+/// already-correct HTML pass through unchanged. Code spans are
+/// rewritten first so their content is not pattern-matched again as
+/// bold; their inner `<`, `>`, `&` are escaped to keep the HTML valid.
+String normalizeMarkdownToTelegramHtml(String s) => s
+    .replaceAllMapped(_mdCodeSpan, (m) {
+      final inner = m
+          .group(1)!
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      return "<code>$inner</code>";
+    })
+    .replaceAllMapped(_mdBold, (m) => "<b>${m.group(1)!}</b>");
 
 Future<void> _sendChatAction({
   required String token,
@@ -278,7 +306,7 @@ class TelegramLiveReply {
     _scheduledTimer?.cancel();
     _scheduledTimer = null;
     _mode = _LiveMode.finalized;
-    final text = _trunc(htmlText, 4096);
+    final text = _trunc(normalizeMarkdownToTelegramHtml(htmlText), 4096);
     // Wait for any in-flight flush to complete before issuing the
     // final edit so the order on the wire matches the order here.
     while (_flushing) {
