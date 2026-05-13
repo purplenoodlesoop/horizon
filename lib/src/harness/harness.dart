@@ -819,5 +819,6 @@ String _withTiming(
     CliChannel() => "$text\n\n— $formatted",
     ScheduleChannel() => "$text\n\n— $formatted",
     InlineChannel() => "$text\n\n<i>— $formatted</i>",
+    VaultChannel() => "$text\n\n— $formatted",
   };
 }

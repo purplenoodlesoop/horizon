@@ -1,12 +1,11 @@
 import "dart:async";
-import "dart:io";
 
 import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
 import "package:glob/glob.dart";
-
 import "package:horizon/src/capability/capability.dart";
 import "package:horizon/src/event/event.dart";
+import "package:watcher/watcher.dart";
 
 var _nextId = 0;
 String _generateVaultId() {
@@ -32,6 +31,13 @@ String _generateVaultId() {
 /// events. Files written while Horizon was stopped are caught by
 /// the existing `schedule:` heartbeat path (capability authors who
 /// want a safety net should declare both `watch:` and `schedule:`).
+///
+/// Uses `package:watcher`'s [DirectoryWatcher] rather than
+/// `Directory.watch(recursive: true)` because the latter, backed by
+/// inotify on Linux, does not pick up subdirectories created after
+/// the watcher starts — a fatal limitation for vaults where Pot
+/// creates a fresh `tasks/<ulid>/` per task. [DirectoryWatcher]
+/// rewalks the tree internally to track new subdirectories.
 class VaultWatchEvents extends StreamFx<Event> {
   VaultWatchEvents({
     required String vaultPath,
@@ -48,7 +54,7 @@ class VaultWatchEvents extends StreamFx<Event> {
     if (patterns.isEmpty) {
       return const Stream.empty();
     }
-    final globs = patterns.map((p) => Glob(p)).toList(growable: false);
+    final globs = patterns.map(Glob.new).toList(growable: false);
 
     final recentFires = <String, DateTime>{};
     bool shouldFire(String relPath) {
@@ -63,9 +69,9 @@ class VaultWatchEvents extends StreamFx<Event> {
       return true;
     }
 
-    final dir = Directory(vaultPath);
+    final watcher = DirectoryWatcher(vaultPath);
     final prefix = "$vaultPath/";
-    return dir.watch(recursive: true).where((fsEvent) {
+    return watcher.events.where((fsEvent) {
       if (!fsEvent.path.startsWith(prefix)) {
         return false;
       }
@@ -77,10 +83,9 @@ class VaultWatchEvents extends StreamFx<Event> {
     }).map((fsEvent) {
       final relPath = fsEvent.path.substring(prefix.length);
       final eventType = switch (fsEvent.type) {
-        FileSystemEvent.create => "create",
-        FileSystemEvent.modify => "modify",
-        FileSystemEvent.delete => "delete",
-        FileSystemEvent.move => "move",
+        ChangeType.ADD => "create",
+        ChangeType.MODIFY => "modify",
+        ChangeType.REMOVE => "delete",
         _ => "unknown",
       };
       return Event(

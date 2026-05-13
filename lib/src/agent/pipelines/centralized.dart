@@ -54,6 +54,7 @@ String? _currentChatIdFor(Channel<Object?> channel) {
       return m?.group(1)?.trim();
     case CliChannel():
     case InlineChannel():
+    case VaultChannel():
       return null;
   }
 }

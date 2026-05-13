@@ -31,6 +31,11 @@ class SendReply extends Fx<void> {
                 inlineMessageId: value.inlineMessageId,
                 text: text,
               );
+            case VaultChannel():
+              // Vault-triggered events have no reply destination —
+              // any human-visible output goes back into the vault as
+              // a side-effect of the capability's tool calls.
+              break;
           }
         });
 }
@@ -104,6 +109,8 @@ class SendChatActionTyping extends Fx<void> {
               // No chat_id for inline messages; the placeholder
               // article text already signals "working on it" to the
               // user.
+              break;
+            case VaultChannel():
               break;
           }
         });

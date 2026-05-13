@@ -23,6 +23,7 @@ String? _telegramChatId(Channel<Object?> channel) => switch (channel) {
   CliChannel() => null,
   ScheduleChannel() => null,
   InlineChannel() => null,
+  VaultChannel() => null,
 };
 
 String _renderInbound(Event event) {
