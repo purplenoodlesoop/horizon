@@ -102,8 +102,20 @@ in
         Packages on the service's PATH. Bash command templates in
         the allowlist rely on these — `bash` for templating itself,
         and the others for the default tool surface (`fetch_url`,
-        `web_search`, etc.). Add more if integration modules ship
-        tools that shell out to additional binaries.
+        `web_search`, etc.). Replace if you want to override entirely;
+        most consumers should use `extraPath` to add packages on top.
+      '';
+    };
+
+    extraPath = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [ ];
+      example = lib.literalExpression "[ pkgs.potentiality ]";
+      description = ''
+        Additional packages appended to the service's PATH after
+        `path`. Use this to add binaries that integration modules
+        need (e.g. `pot` for the Potentiality integration) without
+        having to restate the default list.
       '';
     };
   };
@@ -143,7 +155,7 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
 
-      path = cfg.path;
+      path = cfg.path ++ cfg.extraPath;
 
       serviceConfig = {
         ExecStart = lib.concatStringsSep " " (
