@@ -14,6 +14,7 @@ import "package:horizon/src/channel/reply.dart";
 import "package:horizon/src/channel/telegram.dart";
 import "package:horizon/src/channel/telegram_admin.dart";
 import "package:horizon/src/channel/telegram_batch.dart";
+import "package:horizon/src/channel/vault.dart";
 import "package:horizon/src/config/args.dart";
 import "package:horizon/src/config/config.dart";
 import "package:horizon/src/config/env_store.dart";
@@ -185,10 +186,27 @@ Future<void> _run(
     logger: logger,
   ));
 
+  // Vault-watcher: capabilities that declare `watch:` globs in their
+  // frontmatter receive an event on each matching filesystem change.
+  // Glob set is fixed at startup from startupCaps; adding new globs
+  // requires a restart (capability bodies still hot-reload per event).
+  final watchPatterns =
+      startupCaps.expand((c) => c.watch).toSet();
+  if (watchPatterns.isNotEmpty) {
+    logger.info(
+      "Vault watcher: ${watchPatterns.length} glob pattern(s) from "
+      "${startupCaps.where((c) => c.watch.isNotEmpty).length} capability(ies)",
+    );
+  }
+
   final events = batchTelegramEvents(telegramOut.stream)
       .merge(CliEvents())
       .merge(heartbeat)
-      .merge(scheduleOut.stream);
+      .merge(scheduleOut.stream)
+      .merge(VaultWatchEvents(
+        vaultPath: config.vaultPath,
+        capabilities: startupCaps,
+      ));
 
   var history = IList<Event>();
   var lastToolCount = startupAllowlist.length;

@@ -26,6 +26,15 @@ final class ScheduleChannel
 final class InlineChannel
     = Channel<({String inlineMessageId})> with _ChannelMixin;
 
+/// A filesystem change inside the vault matched at least one
+/// capability's `watch:` glob. Capability prose decides how to react
+/// (read the file, post to a chat, etc.). The event has no reply
+/// destination of its own — replies, if any, are sent via tools like
+/// `send_telegram` to a chat_id the capability looks up from the
+/// vault (e.g. `meta.yaml#telegram.chat_id` for Pot tasks).
+final class VaultChannel
+    = Channel<({String path, String eventType})> with _ChannelMixin;
+
 @freezed
 abstract class Event with _$Event {
   const factory Event({

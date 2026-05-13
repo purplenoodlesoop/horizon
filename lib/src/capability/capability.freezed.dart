@@ -18,6 +18,7 @@ mixin _$Capability {
   String get description;
   String get relativePath;
   String? get schedule;
+  IList<String> get watch;
 
   /// Create a copy of Capability
   /// with the given fields replaced by the non-null parameter values.
@@ -37,16 +38,17 @@ mixin _$Capability {
             (identical(other.relativePath, relativePath) ||
                 other.relativePath == relativePath) &&
             (identical(other.schedule, schedule) ||
-                other.schedule == schedule));
+                other.schedule == schedule) &&
+            const DeepCollectionEquality().equals(other.watch, watch));
   }
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, id, description, relativePath, schedule);
+  int get hashCode => Object.hash(runtimeType, id, description, relativePath,
+      schedule, const DeepCollectionEquality().hash(watch));
 
   @override
   String toString() {
-    return 'Capability(id: $id, description: $description, relativePath: $relativePath, schedule: $schedule)';
+    return 'Capability(id: $id, description: $description, relativePath: $relativePath, schedule: $schedule, watch: $watch)';
   }
 }
 
@@ -57,7 +59,11 @@ abstract mixin class $CapabilityCopyWith<$Res> {
       _$CapabilityCopyWithImpl;
   @useResult
   $Res call(
-      {String id, String description, String relativePath, String? schedule});
+      {String id,
+      String description,
+      String relativePath,
+      String? schedule,
+      IList<String> watch});
 }
 
 /// @nodoc
@@ -76,6 +82,7 @@ class _$CapabilityCopyWithImpl<$Res> implements $CapabilityCopyWith<$Res> {
     Object? description = null,
     Object? relativePath = null,
     Object? schedule = freezed,
+    Object? watch = null,
   }) {
     return _then(_self.copyWith(
       id: null == id
@@ -94,6 +101,10 @@ class _$CapabilityCopyWithImpl<$Res> implements $CapabilityCopyWith<$Res> {
           ? _self.schedule
           : schedule // ignore: cast_nullable_to_non_nullable
               as String?,
+      watch: null == watch
+          ? _self.watch
+          : watch // ignore: cast_nullable_to_non_nullable
+              as IList<String>,
     ));
   }
 }
@@ -192,15 +203,15 @@ extension CapabilityPatterns on Capability {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
     TResult Function(String id, String description, String relativePath,
-            String? schedule)?
+            String? schedule, IList<String> watch)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _Capability() when $default != null:
-        return $default(
-            _that.id, _that.description, _that.relativePath, _that.schedule);
+        return $default(_that.id, _that.description, _that.relativePath,
+            _that.schedule, _that.watch);
       case _:
         return orElse();
     }
@@ -222,14 +233,14 @@ extension CapabilityPatterns on Capability {
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
     TResult Function(String id, String description, String relativePath,
-            String? schedule)
+            String? schedule, IList<String> watch)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _Capability():
-        return $default(
-            _that.id, _that.description, _that.relativePath, _that.schedule);
+        return $default(_that.id, _that.description, _that.relativePath,
+            _that.schedule, _that.watch);
       case _:
         throw StateError('Unexpected subclass');
     }
@@ -250,14 +261,14 @@ extension CapabilityPatterns on Capability {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
     TResult? Function(String id, String description, String relativePath,
-            String? schedule)?
+            String? schedule, IList<String> watch)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _Capability() when $default != null:
-        return $default(
-            _that.id, _that.description, _that.relativePath, _that.schedule);
+        return $default(_that.id, _that.description, _that.relativePath,
+            _that.schedule, _that.watch);
       case _:
         return null;
     }
@@ -271,7 +282,8 @@ class _Capability implements Capability {
       {required this.id,
       required this.description,
       required this.relativePath,
-      this.schedule});
+      this.schedule,
+      this.watch = const IListConst([])});
 
   @override
   final String id;
@@ -281,6 +293,9 @@ class _Capability implements Capability {
   final String relativePath;
   @override
   final String? schedule;
+  @override
+  @JsonKey()
+  final IList<String> watch;
 
   /// Create a copy of Capability
   /// with the given fields replaced by the non-null parameter values.
@@ -301,16 +316,17 @@ class _Capability implements Capability {
             (identical(other.relativePath, relativePath) ||
                 other.relativePath == relativePath) &&
             (identical(other.schedule, schedule) ||
-                other.schedule == schedule));
+                other.schedule == schedule) &&
+            const DeepCollectionEquality().equals(other.watch, watch));
   }
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, id, description, relativePath, schedule);
+  int get hashCode => Object.hash(runtimeType, id, description, relativePath,
+      schedule, const DeepCollectionEquality().hash(watch));
 
   @override
   String toString() {
-    return 'Capability(id: $id, description: $description, relativePath: $relativePath, schedule: $schedule)';
+    return 'Capability(id: $id, description: $description, relativePath: $relativePath, schedule: $schedule, watch: $watch)';
   }
 }
 
@@ -323,7 +339,11 @@ abstract mixin class _$CapabilityCopyWith<$Res>
   @override
   @useResult
   $Res call(
-      {String id, String description, String relativePath, String? schedule});
+      {String id,
+      String description,
+      String relativePath,
+      String? schedule,
+      IList<String> watch});
 }
 
 /// @nodoc
@@ -342,6 +362,7 @@ class __$CapabilityCopyWithImpl<$Res> implements _$CapabilityCopyWith<$Res> {
     Object? description = null,
     Object? relativePath = null,
     Object? schedule = freezed,
+    Object? watch = null,
   }) {
     return _then(_Capability(
       id: null == id
@@ -360,6 +381,10 @@ class __$CapabilityCopyWithImpl<$Res> implements _$CapabilityCopyWith<$Res> {
           ? _self.schedule
           : schedule // ignore: cast_nullable_to_non_nullable
               as String?,
+      watch: null == watch
+          ? _self.watch
+          : watch // ignore: cast_nullable_to_non_nullable
+              as IList<String>,
     ));
   }
 }

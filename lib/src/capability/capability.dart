@@ -12,6 +12,11 @@ part "capability.freezed.dart";
 /// `id` and `description` come from YAML frontmatter; the body is
 /// loaded on demand by the orchestrator via the existing `read_file`
 /// tool. The harness never reads the body itself.
+///
+/// [watch] lists glob patterns (relative to the vault root) that the
+/// vault-watcher channel uses to fire events. A file change matching
+/// any of a capability's watch patterns produces a vault-channel
+/// event the orchestrator processes with the capability loaded.
 @freezed
 abstract class Capability with _$Capability {
   const factory Capability({
@@ -19,6 +24,7 @@ abstract class Capability with _$Capability {
     required String description,
     required String relativePath,
     String? schedule,
+    @Default(IListConst([])) IList<String> watch,
   }) = _Capability;
 }
 
@@ -72,6 +78,10 @@ Capability? _parseCapability(
     return null;
   }
   final schedule = doc["schedule"];
+  final watchRaw = doc["watch"];
+  final watch = watchRaw is YamlList
+      ? watchRaw.whereType<String>().toIList()
+      : <String>[].lock;
   final prefix = "$vaultPath/";
   final relativePath = file.path.startsWith(prefix)
       ? file.path.substring(prefix.length)
@@ -81,6 +91,7 @@ Capability? _parseCapability(
     description: description,
     relativePath: relativePath,
     schedule: schedule is String ? schedule : null,
+    watch: watch,
   );
 }
 
