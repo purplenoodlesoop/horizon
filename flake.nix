@@ -20,6 +20,11 @@
         in
         {
           flake.packages.default = horizon;
+          flake.packages.horizon = horizon;
         };
+      topLevel = {
+        nixosModules.horizon = ./nix/module.nix;
+        nixosModules.default = ./nix/module.nix;
+      };
     };
 }
