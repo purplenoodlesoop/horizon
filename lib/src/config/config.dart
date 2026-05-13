@@ -1,3 +1,4 @@
+import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:freezed_annotation/freezed_annotation.dart";
 import "package:pure/pure.dart";
 
@@ -22,6 +23,7 @@ abstract class HorizonConfig with _$HorizonConfig {
     required String vaultPath,
     required Mode<()> mode,
     required String allowlistOverride,
+    required IList<String> extraAllowlists,
     required String templatesPath,
     required Duration heartbeatInterval,
     required bool streamUi,

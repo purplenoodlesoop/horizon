@@ -17,6 +17,7 @@ mixin _$HorizonConfig {
   String get vaultPath;
   Mode<()> get mode;
   String get allowlistOverride;
+  IList<String> get extraAllowlists;
   String get templatesPath;
   Duration get heartbeatInterval;
   bool get streamUi;
@@ -40,6 +41,8 @@ mixin _$HorizonConfig {
             (identical(other.mode, mode) || other.mode == mode) &&
             (identical(other.allowlistOverride, allowlistOverride) ||
                 other.allowlistOverride == allowlistOverride) &&
+            const DeepCollectionEquality()
+                .equals(other.extraAllowlists, extraAllowlists) &&
             (identical(other.templatesPath, templatesPath) ||
                 other.templatesPath == templatesPath) &&
             (identical(other.heartbeatInterval, heartbeatInterval) ||
@@ -56,6 +59,7 @@ mixin _$HorizonConfig {
       vaultPath,
       mode,
       allowlistOverride,
+      const DeepCollectionEquality().hash(extraAllowlists),
       templatesPath,
       heartbeatInterval,
       streamUi,
@@ -63,7 +67,7 @@ mixin _$HorizonConfig {
 
   @override
   String toString() {
-    return 'HorizonConfig(vaultPath: $vaultPath, mode: $mode, allowlistOverride: $allowlistOverride, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval, streamUi: $streamUi, envFilePath: $envFilePath)';
+    return 'HorizonConfig(vaultPath: $vaultPath, mode: $mode, allowlistOverride: $allowlistOverride, extraAllowlists: $extraAllowlists, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval, streamUi: $streamUi, envFilePath: $envFilePath)';
   }
 }
 
@@ -77,6 +81,7 @@ abstract mixin class $HorizonConfigCopyWith<$Res> {
       {String vaultPath,
       Mode<()> mode,
       String allowlistOverride,
+      IList<String> extraAllowlists,
       String templatesPath,
       Duration heartbeatInterval,
       bool streamUi,
@@ -99,6 +104,7 @@ class _$HorizonConfigCopyWithImpl<$Res>
     Object? vaultPath = null,
     Object? mode = null,
     Object? allowlistOverride = null,
+    Object? extraAllowlists = null,
     Object? templatesPath = null,
     Object? heartbeatInterval = null,
     Object? streamUi = null,
@@ -117,6 +123,10 @@ class _$HorizonConfigCopyWithImpl<$Res>
           ? _self.allowlistOverride
           : allowlistOverride // ignore: cast_nullable_to_non_nullable
               as String,
+      extraAllowlists: null == extraAllowlists
+          ? _self.extraAllowlists
+          : extraAllowlists // ignore: cast_nullable_to_non_nullable
+              as IList<String>,
       templatesPath: null == templatesPath
           ? _self.templatesPath
           : templatesPath // ignore: cast_nullable_to_non_nullable
@@ -234,6 +244,7 @@ extension HorizonConfigPatterns on HorizonConfig {
             String vaultPath,
             Mode<()> mode,
             String allowlistOverride,
+            IList<String> extraAllowlists,
             String templatesPath,
             Duration heartbeatInterval,
             bool streamUi,
@@ -248,6 +259,7 @@ extension HorizonConfigPatterns on HorizonConfig {
             _that.vaultPath,
             _that.mode,
             _that.allowlistOverride,
+            _that.extraAllowlists,
             _that.templatesPath,
             _that.heartbeatInterval,
             _that.streamUi,
@@ -276,6 +288,7 @@ extension HorizonConfigPatterns on HorizonConfig {
             String vaultPath,
             Mode<()> mode,
             String allowlistOverride,
+            IList<String> extraAllowlists,
             String templatesPath,
             Duration heartbeatInterval,
             bool streamUi,
@@ -289,6 +302,7 @@ extension HorizonConfigPatterns on HorizonConfig {
             _that.vaultPath,
             _that.mode,
             _that.allowlistOverride,
+            _that.extraAllowlists,
             _that.templatesPath,
             _that.heartbeatInterval,
             _that.streamUi,
@@ -316,6 +330,7 @@ extension HorizonConfigPatterns on HorizonConfig {
             String vaultPath,
             Mode<()> mode,
             String allowlistOverride,
+            IList<String> extraAllowlists,
             String templatesPath,
             Duration heartbeatInterval,
             bool streamUi,
@@ -329,6 +344,7 @@ extension HorizonConfigPatterns on HorizonConfig {
             _that.vaultPath,
             _that.mode,
             _that.allowlistOverride,
+            _that.extraAllowlists,
             _that.templatesPath,
             _that.heartbeatInterval,
             _that.streamUi,
@@ -346,6 +362,7 @@ class _HorizonConfig implements HorizonConfig {
       {required this.vaultPath,
       required this.mode,
       required this.allowlistOverride,
+      required this.extraAllowlists,
       required this.templatesPath,
       required this.heartbeatInterval,
       required this.streamUi,
@@ -357,6 +374,8 @@ class _HorizonConfig implements HorizonConfig {
   final Mode<()> mode;
   @override
   final String allowlistOverride;
+  @override
+  final IList<String> extraAllowlists;
   @override
   final String templatesPath;
   @override
@@ -384,6 +403,8 @@ class _HorizonConfig implements HorizonConfig {
             (identical(other.mode, mode) || other.mode == mode) &&
             (identical(other.allowlistOverride, allowlistOverride) ||
                 other.allowlistOverride == allowlistOverride) &&
+            const DeepCollectionEquality()
+                .equals(other.extraAllowlists, extraAllowlists) &&
             (identical(other.templatesPath, templatesPath) ||
                 other.templatesPath == templatesPath) &&
             (identical(other.heartbeatInterval, heartbeatInterval) ||
@@ -400,6 +421,7 @@ class _HorizonConfig implements HorizonConfig {
       vaultPath,
       mode,
       allowlistOverride,
+      const DeepCollectionEquality().hash(extraAllowlists),
       templatesPath,
       heartbeatInterval,
       streamUi,
@@ -407,7 +429,7 @@ class _HorizonConfig implements HorizonConfig {
 
   @override
   String toString() {
-    return 'HorizonConfig(vaultPath: $vaultPath, mode: $mode, allowlistOverride: $allowlistOverride, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval, streamUi: $streamUi, envFilePath: $envFilePath)';
+    return 'HorizonConfig(vaultPath: $vaultPath, mode: $mode, allowlistOverride: $allowlistOverride, extraAllowlists: $extraAllowlists, templatesPath: $templatesPath, heartbeatInterval: $heartbeatInterval, streamUi: $streamUi, envFilePath: $envFilePath)';
   }
 }
 
@@ -423,6 +445,7 @@ abstract mixin class _$HorizonConfigCopyWith<$Res>
       {String vaultPath,
       Mode<()> mode,
       String allowlistOverride,
+      IList<String> extraAllowlists,
       String templatesPath,
       Duration heartbeatInterval,
       bool streamUi,
@@ -445,6 +468,7 @@ class __$HorizonConfigCopyWithImpl<$Res>
     Object? vaultPath = null,
     Object? mode = null,
     Object? allowlistOverride = null,
+    Object? extraAllowlists = null,
     Object? templatesPath = null,
     Object? heartbeatInterval = null,
     Object? streamUi = null,
@@ -463,6 +487,10 @@ class __$HorizonConfigCopyWithImpl<$Res>
           ? _self.allowlistOverride
           : allowlistOverride // ignore: cast_nullable_to_non_nullable
               as String,
+      extraAllowlists: null == extraAllowlists
+          ? _self.extraAllowlists
+          : extraAllowlists // ignore: cast_nullable_to_non_nullable
+              as IList<String>,
       templatesPath: null == templatesPath
           ? _self.templatesPath
           : templatesPath // ignore: cast_nullable_to_non_nullable

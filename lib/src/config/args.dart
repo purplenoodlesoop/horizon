@@ -1,6 +1,7 @@
 import "dart:io";
 
 import "package:args/args.dart";
+import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
 
 import "package:horizon/src/config/config.dart";
@@ -66,6 +67,15 @@ final _parser = ArgParser()
         r"harness reads from <vault>/_horizon/system/allowlist.yaml "
         r"(bootstrapped from templates on first run). $HORIZON_ALLOWLIST "
         r"is honored as a secondary override.",
+  )
+  ..addMultiOption(
+    "extra-allowlist",
+    help: r"Path to an additional allowlist YAML fragment. The tools "
+        r"merge with the vault's main allowlist (or with --allowlist if "
+        r"overridden). Repeatable. Tool name conflicts across sources "
+        r"are fatal at load time. Use for NixOS-style integrations that "
+        r"ship a tool surface without touching the user-editable vault "
+        r"allowlist.",
   )
   ..addOption(
     "templates",
@@ -158,6 +168,10 @@ class ParseArgs extends Fx<({HorizonConfig config, EnvStore envStore})> {
             rawAllowlist is String && rawAllowlist.isNotEmpty
                 ? rawAllowlist
                 : (Platform.environment["HORIZON_ALLOWLIST"] ?? "");
+        final rawExtraAllowlists = results["extra-allowlist"];
+        final extraAllowlists = rawExtraAllowlists is List<String>
+            ? rawExtraAllowlists.toIList()
+            : <String>[].lock;
         final templatesPath = rawTemplates is String && rawTemplates.isNotEmpty
             ? rawTemplates
             : (Platform.environment["HORIZON_TEMPLATES"] ?? "templates");
@@ -170,6 +184,7 @@ class ParseArgs extends Fx<({HorizonConfig config, EnvStore envStore})> {
           vaultPath: vaultPath,
           mode: mode,
           allowlistOverride: allowlistOverride,
+          extraAllowlists: extraAllowlists,
           templatesPath: templatesPath,
           heartbeatInterval: Duration(seconds: heartbeatSeconds),
           streamUi: streamUi,

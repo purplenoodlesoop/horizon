@@ -88,7 +88,15 @@ Future<void> _run(
     override: config.allowlistOverride,
   );
   logger.debug("Allowlist source: $startupAllowlistPath");
-  final startupAllowlist = await LoadAllowlist(startupAllowlistPath);
+  if (config.extraAllowlists.isNotEmpty) {
+    logger.debug(
+      "Extra allowlists: ${config.extraAllowlists.join(", ")}",
+    );
+  }
+  final startupAllowlist = await LoadAllowlist(
+    startupAllowlistPath,
+    extraPaths: config.extraAllowlists,
+  );
   logger.debug("Loaded ${startupAllowlist.length} tool(s) at startup");
 
   final isAgent = config.mode is AgentMode;
@@ -212,12 +220,18 @@ Future<void> _run(
       history = _addToHistory(history, event);
       try {
         // Reload the allowlist per event — vault edits propagate
-        // without restart, same discipline as capabilities.
-        final liveAllowlist = await LoadAllowlist(resolveAllowlistPath(
-          vaultPath: config.vaultPath,
-          templatesPath: config.templatesPath,
-          override: config.allowlistOverride,
-        ));
+        // without restart, same discipline as capabilities. Extras
+        // come from --extra-allowlist flags; their contents are
+        // re-read each event too, so a NixOS rebuild that bumps a
+        // store-path fragment takes effect on the next message.
+        final liveAllowlist = await LoadAllowlist(
+          resolveAllowlistPath(
+            vaultPath: config.vaultPath,
+            templatesPath: config.templatesPath,
+            override: config.allowlistOverride,
+          ),
+          extraPaths: config.extraAllowlists,
+        );
         if (liveAllowlist.length != lastToolCount) {
           logger.info(
             "Allowlist reload: $lastToolCount → ${liveAllowlist.length} "
@@ -519,11 +533,14 @@ Future<void> _runScheduler({
       try {
         // Reload the allowlist at fire time so a freshly-edited tool
         // is available to watchdog jobs without restart.
-        final allowlist = await LoadAllowlist(resolveAllowlistPath(
-          vaultPath: config.vaultPath,
-          templatesPath: config.templatesPath,
-          override: config.allowlistOverride,
-        ));
+        final allowlist = await LoadAllowlist(
+          resolveAllowlistPath(
+            vaultPath: config.vaultPath,
+            templatesPath: config.templatesPath,
+            override: config.allowlistOverride,
+          ),
+          extraPaths: config.extraAllowlists,
+        );
         await _runNoAgentSchedule(
           fire: fire,
           allowlist: allowlist,

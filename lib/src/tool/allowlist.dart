@@ -69,19 +69,46 @@ AllowlistedTool _parseTool(Object? raw) {
 }
 
 class LoadAllowlist extends Fx<IList<AllowlistedTool>> {
-  LoadAllowlist(String path)
-    : super(() {
-        final content = File(path).readAsStringSync();
-        final doc = loadYaml(content);
-        if (doc is! YamlMap) {
-          return IList();
+  /// Loads the main allowlist YAML at [mainPath] and merges in any
+  /// [extraPaths] (in order). Tool names must be unique across all
+  /// sources — a duplicate is a fatal load-time error so external
+  /// integrations can't silently shadow user-edited tools or vice
+  /// versa. Use [extraPaths] for NixOS-style integration fragments
+  /// that ship outside the vault.
+  LoadAllowlist(
+    String mainPath, {
+    IList<String> extraPaths = const IListConst([]),
+  }) : super(() {
+        final all = <AllowlistedTool>[];
+        final origin = <String, String>{};
+        for (final path in [mainPath, ...extraPaths]) {
+          for (final tool in _loadFile(path)) {
+            final prev = origin[tool.name];
+            if (prev != null) {
+              throw FormatException(
+                "Allowlist tool name conflict: '${tool.name}' appears in "
+                "both '$prev' and '$path' — rename one of the entries.",
+              );
+            }
+            origin[tool.name] = path;
+            all.add(tool);
+          }
         }
-        final rawTools = doc["tools"];
-        if (rawTools is! YamlList) {
-          return IList();
-        }
-        return rawTools.map(_parseTool).toIList();
+        return all.toIList();
       });
+}
+
+List<AllowlistedTool> _loadFile(String path) {
+  final content = File(path).readAsStringSync();
+  final doc = loadYaml(content);
+  if (doc is! YamlMap) {
+    return const [];
+  }
+  final rawTools = doc["tools"];
+  if (rawTools is! YamlList) {
+    return const [];
+  }
+  return rawTools.map(_parseTool).toList();
 }
 
 /// Resolves which allowlist file to read on a given event.
