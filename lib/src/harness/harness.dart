@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:collection";
 import "dart:convert";
 import "dart:io";
 
@@ -211,64 +212,115 @@ Future<void> _run(
   var history = IList<Event>();
   var lastToolCount = startupAllowlist.length;
 
-  try {
-    await for (final event in events) {
-      if (isAgent) {
-        _logJson({"type": "event", "id": event.id, "content": event.content});
+  // Priority-aware event dispatch (issue #14): user-facing events
+  // (TelegramChannel, InlineChannel, CliChannel, VaultChannel) are
+  // drained before queued heartbeat / schedule events. This prevents a
+  // long-running heartbeat from blocking a tg_* message for minutes.
+  //
+  // Note: this prioritises the NEXT event chosen, not the currently
+  // in-flight one. An already-running heartbeat pipeline is not
+  // interrupted — but once it finishes, any waiting tg_* events are
+  // processed first before the next heartbeat is picked up.
+  final urgentQueue = Queue<Event>();
+  final backgroundQueue = Queue<Event>();
+  var eventStreamDone = false;
+  var wakeup = Completer<void>();
+
+  events.listen(
+    (e) {
+      if (_isUrgent(e)) {
+        urgentQueue.add(e);
       } else {
-        logger.info("[${event.id}] ${event.content}");
+        backgroundQueue.add(e);
       }
-      // Pre-LLM admin command intercept on Telegram. Known commands
-      // are handled structurally (no LLM); unknown `/`-prefixes fall
-      // through to the orchestrator. CLI is unaffected (the user
-      // already has shell access).
-      if (event.channel is TelegramChannel) {
-        final cmd = parseAdminCommand(event.content);
-        if (cmd != null) {
-          await _handleAdminCommand(
-            event: event,
-            command: cmd,
-            config: config,
-            envStore: envStore,
-            logger: logger,
-          );
-          continue;
-        }
-      }
-      history = _addToHistory(history, event);
-      try {
-        // Reload the allowlist per event — vault edits propagate
-        // without restart, same discipline as capabilities. Extras
-        // come from --extra-allowlist flags; their contents are
-        // re-read each event too, so a NixOS rebuild that bumps a
-        // store-path fragment takes effect on the next message.
-        final liveAllowlist = await LoadAllowlist(
-          resolveAllowlistPath(
-            vaultPath: config.vaultPath,
-            templatesPath: config.templatesPath,
-            override: config.allowlistOverride,
-          ),
-          extraPaths: config.extraAllowlists,
-        );
-        if (liveAllowlist.length != lastToolCount) {
-          logger.info(
-            "Allowlist reload: $lastToolCount → ${liveAllowlist.length} "
-            "tool(s)",
-          );
-          lastToolCount = liveAllowlist.length;
-        }
-        await _processEvent(
+      if (!wakeup.isCompleted) wakeup.complete();
+    },
+    onDone: () {
+      eventStreamDone = true;
+      if (!wakeup.isCompleted) wakeup.complete();
+    },
+    onError: (Object e, StackTrace st) {
+      logger.error("Event stream error: $e", stackTrace: st);
+    },
+  );
+
+  Event? pickNext() {
+    if (urgentQueue.isNotEmpty) return urgentQueue.removeFirst();
+    if (backgroundQueue.isNotEmpty) return backgroundQueue.removeFirst();
+    return null;
+  }
+
+  Future<void> processEvent(Event event) async {
+    if (isAgent) {
+      _logJson({"type": "event", "id": event.id, "content": event.content});
+    } else {
+      logger.info("[${event.id}] ${event.content}");
+    }
+    // Pre-LLM admin command intercept on Telegram. Known commands
+    // are handled structurally (no LLM); unknown `/`-prefixes fall
+    // through to the orchestrator. CLI is unaffected (the user
+    // already has shell access).
+    if (event.channel is TelegramChannel) {
+      final cmd = parseAdminCommand(event.content);
+      if (cmd != null) {
+        await _handleAdminCommand(
           event: event,
-          allowlist: liveAllowlist,
+          command: cmd,
           config: config,
           envStore: envStore,
-          history: history,
           logger: logger,
-          isAgent: isAgent,
         );
-      } on Exception catch (e, st) {
-        logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
+        return;
       }
+    }
+    history = _addToHistory(history, event);
+    try {
+      // Reload the allowlist per event — vault edits propagate
+      // without restart, same discipline as capabilities. Extras
+      // come from --extra-allowlist flags; their contents are
+      // re-read each event too, so a NixOS rebuild that bumps a
+      // store-path fragment takes effect on the next message.
+      final liveAllowlist = await LoadAllowlist(
+        resolveAllowlistPath(
+          vaultPath: config.vaultPath,
+          templatesPath: config.templatesPath,
+          override: config.allowlistOverride,
+        ),
+        extraPaths: config.extraAllowlists,
+      );
+      if (liveAllowlist.length != lastToolCount) {
+        logger.info(
+          "Allowlist reload: $lastToolCount → ${liveAllowlist.length} "
+          "tool(s)",
+        );
+        lastToolCount = liveAllowlist.length;
+      }
+      await _processEvent(
+        event: event,
+        allowlist: liveAllowlist,
+        config: config,
+        envStore: envStore,
+        history: history,
+        logger: logger,
+        isAgent: isAgent,
+      );
+    } on Exception catch (e, st) {
+      logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
+    }
+  }
+
+  try {
+    while (!eventStreamDone ||
+        urgentQueue.isNotEmpty ||
+        backgroundQueue.isNotEmpty) {
+      var event = pickNext();
+      if (event == null) {
+        await wakeup.future;
+        wakeup = Completer<void>();
+        event = pickNext();
+        if (event == null) continue;
+      }
+      await processEvent(event);
     }
   } finally {
     await telegramSub?.cancel();
@@ -826,6 +878,15 @@ String _briefArgs(IMap<String, String> args) {
   });
   return entries.join(", ");
 }
+
+/// Returns true for events that need low-latency processing (user-facing).
+/// These are drained before queued heartbeat / schedule events in the
+/// priority dispatcher (see issue #14).
+bool _isUrgent(Event event) =>
+    event.channel is TelegramChannel ||
+    event.channel is InlineChannel ||
+    event.channel is CliChannel ||
+    event.channel is VaultChannel;
 
 String _withTiming(
   String text,
