@@ -26,6 +26,7 @@ import "package:horizon/src/harness/bootstrap.dart";
 import "package:horizon/src/harness/console_logger.dart";
 import "package:horizon/src/harness/file_logger.dart";
 import "package:horizon/src/harness/message_store.dart";
+import "package:horizon/src/harness/orphan_recovery.dart";
 import "package:horizon/src/schedule/schedule.dart";
 import "package:horizon/src/schedule/scheduler.dart";
 import "package:horizon/src/tool/allowlist.dart";
@@ -37,28 +38,27 @@ const _historyLimit = 100;
 
 class RunHarness extends Fx<void> {
   RunHarness(List<String> args)
-    : super(() async {
-        final parsed = await ParseArgs(args);
-        final config = parsed.config;
-        final envStore = parsed.envStore;
-        final timestamp = DateTime.now()
-            .toIso8601String()
-            .replaceAll(":", "-");
-        final logPath = "logs/$timestamp.log";
-        final fileProcessor = FileMessageProcessor.open(logPath);
-        final isAgent = config.mode is AgentMode;
-        final logger = Logger(
-          processors: [
-            if (!isAgent) const ConsoleMessageProcessor(),
-            fileProcessor,
-          ],
-        );
-        try {
-          await _run(config, envStore, logger);
-        } finally {
-          await logger.dispose();
-        }
-      });
+      : super(() async {
+          final parsed = await ParseArgs(args);
+          final config = parsed.config;
+          final envStore = parsed.envStore;
+          final timestamp =
+              DateTime.now().toIso8601String().replaceAll(":", "-");
+          final logPath = "logs/$timestamp.log";
+          final fileProcessor = FileMessageProcessor.open(logPath);
+          final isAgent = config.mode is AgentMode;
+          final logger = Logger(
+            processors: [
+              if (!isAgent) const ConsoleMessageProcessor(),
+              fileProcessor,
+            ],
+          );
+          try {
+            await _run(config, envStore, logger);
+          } finally {
+            await logger.dispose();
+          }
+        });
 }
 
 Future<void> _run(
@@ -153,6 +153,7 @@ Future<void> _run(
           logger.error("Telegram poller error: $e", stackTrace: st),
     );
   }
+
   startPoller();
 
   // Live .env reload: file-watch in parallel with the event loop.
@@ -191,8 +192,7 @@ Future<void> _run(
   // frontmatter receive an event on each matching filesystem change.
   // Glob set is fixed at startup from startupCaps; adding new globs
   // requires a restart (capability bodies still hot-reload per event).
-  final watchPatterns =
-      startupCaps.expand((c) => c.watch).toSet();
+  final watchPatterns = startupCaps.expand((c) => c.watch).toSet();
   if (watchPatterns.isNotEmpty) {
     logger.info(
       "Vault watcher: ${watchPatterns.length} glob pattern(s) from "
@@ -233,11 +233,15 @@ Future<void> _run(
       } else {
         backgroundQueue.add(e);
       }
-      if (!wakeup.isCompleted) wakeup.complete();
+      if (!wakeup.isCompleted) {
+        wakeup.complete();
+      }
     },
     onDone: () {
       eventStreamDone = true;
-      if (!wakeup.isCompleted) wakeup.complete();
+      if (!wakeup.isCompleted) {
+        wakeup.complete();
+      }
     },
     onError: (Object e, StackTrace st) {
       logger.error("Event stream error: $e", stackTrace: st);
@@ -245,8 +249,12 @@ Future<void> _run(
   );
 
   Event? pickNext() {
-    if (urgentQueue.isNotEmpty) return urgentQueue.removeFirst();
-    if (backgroundQueue.isNotEmpty) return backgroundQueue.removeFirst();
+    if (urgentQueue.isNotEmpty) {
+      return urgentQueue.removeFirst();
+    }
+    if (backgroundQueue.isNotEmpty) {
+      return backgroundQueue.removeFirst();
+    }
     return null;
   }
 
@@ -318,7 +326,9 @@ Future<void> _run(
         await wakeup.future;
         wakeup = Completer<void>();
         event = pickNext();
-        if (event == null) continue;
+        if (event == null) {
+          continue;
+        }
       }
       await processEvent(event);
     }
@@ -354,6 +364,32 @@ Future<void> _processEvent({
   // the harness skips the LLM entirely — heartbeats with nothing
   // due cost zero LLM calls.
   final isHeartbeat = event.id.startsWith("heartbeat_");
+
+  // Issue #13: deterministic recovery for tg_* events that closed
+  // with had_reply: false (LLM dropped the message, pipeline crashed,
+  // etc.). Runs on every heartbeat before the due-capability check
+  // so even idle heartbeats deliver the safety net. The scanner
+  // self-dedupes via a sidecar marker and cross-checks the message
+  // file's `## Out` section so the issue #11 fallback isn't doubled.
+  if (isHeartbeat) {
+    try {
+      final recovered = await RecoverOrphanedTurns(
+        vaultPath: config.vaultPath,
+        telegramToken: envStore.telegramToken,
+        lookback: const Duration(minutes: 15),
+        now: DateTime.now(),
+        logger: logger,
+      );
+      if (recovered > 0) {
+        logger.info(
+          "[orphan-recovery] $recovered tg_* turn(s) recovered",
+        );
+      }
+    } on Exception catch (e, st) {
+      logger.error("Orphan recovery failed: $e", stackTrace: st);
+    }
+  }
+
   IList<Capability> capsForPipeline;
   if (isHeartbeat) {
     final due = await DueCapabilities(
@@ -498,11 +534,10 @@ Future<void> _processEvent({
           }
         case PipelineReply(:final text):
           if (text != null) {
-            final normalized =
-                event.channel is TelegramChannel ||
-                        event.channel is InlineChannel
-                    ? _normalizeMarkdownToHtml(text)
-                    : text;
+            final normalized = event.channel is TelegramChannel ||
+                    event.channel is InlineChannel
+                ? _normalizeMarkdownToHtml(text)
+                : text;
             final timed = _withTiming(
               normalized,
               stopwatch.elapsed,
@@ -822,10 +857,8 @@ void _logBlue(String message) {
 /// body has already been streamed to stdout.
 String _trailingFooter(String suffix) => suffix.trim();
 
-String _htmlEscape(String s) => s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+String _htmlEscape(String s) =>
+    s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 /// Best-effort Markdown → Telegram-HTML normalization. The standing
 /// prompt instructs the model to emit Telegram HTML, but Kimi-class
@@ -871,9 +904,7 @@ String _briefArgs(IMap<String, String> args) {
     return "";
   }
   final entries = args.entries.take(2).map((e) {
-    final v = e.value.length > 40
-        ? "${e.value.substring(0, 39)}…"
-        : e.value;
+    final v = e.value.length > 40 ? "${e.value.substring(0, 39)}…" : e.value;
     return "${e.key}=$v";
   });
   return entries.join(", ");
@@ -894,9 +925,7 @@ String _withTiming(
   Channel<Object?> channel,
 ) {
   final secs = elapsed.inSeconds;
-  final formatted = secs < 60
-      ? "${secs}s"
-      : "${secs ~/ 60}m ${secs % 60}s";
+  final formatted = secs < 60 ? "${secs}s" : "${secs ~/ 60}m ${secs % 60}s";
   return switch (channel) {
     TelegramChannel() => "$text\n\n<i>— $formatted</i>",
     CliChannel() => "$text\n\n— $formatted",
