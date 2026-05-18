@@ -161,3 +161,17 @@ tools:
         description: "Telegram-flavored HTML body, max ~4000 characters. Supported tags: <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">. Escape literal < > & as &lt; &gt; &amp; — Telegram returns HTTP 400 on invalid HTML. Do NOT use Markdown (**bold**, *italic*, `code`); those will render as literal characters."
     command: "curl -sS --max-time 15 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage\" --data-urlencode chat_id={chat_id} --data-urlencode text={text} --data-urlencode parse_mode=HTML"
 
+  - name: send_telegram_document
+    description: "Send a vault file to a Telegram chat as a document attachment. Use when a task produces an artifact (findings.md, a generated report, an exported file) that is too large or too rich to inline in a chat message — the user can tap the attachment to read or save it. The caption is plain text only (~1000 chars); use send_telegram separately for an HTML-formatted intro message. Same chat_id rules as send_telegram. Files up to 50 MB are supported by Telegram's bot API."
+    parameters:
+      chat_id:
+        type: telegram_chat_id
+        description: Telegram chat_id of the user. Must be a chat_id that has previously sent the bot an accepted message (i.e. present in _horizon/messages/ frontmatter). The harness validates this and rejects unknown chat_ids.
+      path:
+        type: path
+        description: Vault-relative path to the file to attach. Validated to stay under the vault root.
+      caption:
+        type: string
+        description: "Optional plain-text caption shown beneath the attachment in Telegram. Max ~1000 chars. Use an empty string for no caption. Plain text only — HTML markup is rendered literally in captions."
+    command: "curl -sS --max-time 60 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument\" -F chat_id={chat_id} -F document=@{vault_path}/{path} -F caption={caption}"
+
