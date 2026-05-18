@@ -137,13 +137,19 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
                     "suppressing sentinel reply",
                   );
                 }
+                // For heartbeat events the implicit reply text is never
+                // routed to a delivery channel (heartbeats have no chat_id
+                // binding). Record hadReply=false so turn ledgers don't
+                // claim the user received something they didn't.
+                // Explicit `send_telegram` tool calls within a heartbeat
+                // still deliver — they're tracked in toolsCalled separately.
                 await WriteTurnRecord(
                   vaultPath: config.vaultPath,
                   event: event,
                   capabilitiesRead: result.capabilitiesRead,
                   toolsCalled: result.toolsCalled,
                   wrotePaths: result.writtenPaths,
-                  hadReply: replyText != null,
+                  hadReply: !heartbeatMode && replyText != null,
                 );
                 yield PipelineReply(event: event, text: replyText);
             }

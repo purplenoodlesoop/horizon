@@ -514,7 +514,15 @@ Future<void> _processEvent({
               }
               logger.debug("[reply] (${text.length} chars) $timed");
             } else {
-              logger.info("[reply] $timed");
+              // No delivery channel (e.g. heartbeat with non-sentinel
+              // implicit reply text). Log as discarded so turn ledgers
+              // and journalctl don't claim the user received something
+              // they didn't — the [reply] label implies delivery.
+              logger.warning(
+                "[reply-discarded] ${event.id}: "
+                "${text.length} chars of implicit reply text have no "
+                "delivery destination and were not sent to the user",
+              );
             }
           }
       }
@@ -524,6 +532,20 @@ Future<void> _processEvent({
     if (streamingToStdout) {
       stdout.writeln();
     }
+  }
+
+  // Issue #11: if the LLM produced zero completion tokens the pipeline
+  // yields PipelineReply(text: null) and `replies` stays empty, leaving
+  // the "Thinking…" Telegram placeholder stuck indefinitely. Detect this
+  // and finalize with a user-visible fallback so the chat is never silent.
+  if (live != null && replies.isEmpty) {
+    logger.warning(
+      "[${event.id}] LLM returned completion=0 — "
+      "finalizing live reply with fallback message",
+    );
+    const fallback = "I didn't catch that — please try again.";
+    await live.finalize(fallback);
+    replies.add(fallback);
   }
 
   // Append the outbound side once the pipeline drains.
