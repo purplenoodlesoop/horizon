@@ -62,6 +62,21 @@ class ExecuteTool extends Fx<String> {
               if (pathError != null) {
                 return "Error: $pathError";
               }
+              // Structural block: writes / deletes to pot-task-owned
+              // files (findings.md, transcript.*, task.md, plan.md,
+              // meta.yaml under tasks/<id>/) are reserved for the
+              // Potentiality daemon and its spawned agents. The
+              // orchestrator cannot write these even if its capability
+              // prose suggests "deliver the result." See
+              // validateTaskWrite for the rationale.
+              if (toolName == "write_file" ||
+                  toolName == "append_file" ||
+                  toolName == "delete_file") {
+                final writeError = validateTaskWrite(argValue);
+                if (writeError != null) {
+                  return "Error: $writeError";
+                }
+              }
             }
             if (param != null && param.type == "telegram_chat_id") {
               final allowed = loadAllowedChatIds(vaultPath);

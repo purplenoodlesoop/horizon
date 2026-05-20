@@ -303,7 +303,7 @@ Future<void> _run(
         );
         lastToolCount = liveAllowlist.length;
       }
-      await _processEvent(
+      final replies = await _processEvent(
         event: event,
         allowlist: liveAllowlist,
         config: config,
@@ -312,6 +312,27 @@ Future<void> _run(
         logger: logger,
         isAgent: isAgent,
       );
+      // Push orchestrator's own replies into history so the next
+      // turn's LLM sees what it just said. Without this, the
+      // orchestrator is amnesic about its own outputs — a user's
+      // terse answer to a question the orchestrator just asked
+      // ("spin a task", "yes", "do it") arrives without the
+      // question in the LLM's working memory and gets bound to
+      // whichever recent inbound message the LLM finds most
+      // prominent. Observed 2026-05-20: wrong-topic dispatch.
+      if (replies.isNotEmpty) {
+        final joined = replies.join("\n\n");
+        final truncated = joined.length > 1500
+            ? "${joined.substring(0, 1499)}…"
+            : joined;
+        final selfEvent = Event(
+          id: "self_${event.id}",
+          content: "[your prior reply] $truncated",
+          channel: event.channel,
+          timestamp: DateTime.now(),
+        );
+        history = _addToHistory(history, selfEvent);
+      }
     } on Exception catch (e, st) {
       logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
     }
@@ -339,7 +360,7 @@ Future<void> _run(
   }
 }
 
-Future<void> _processEvent({
+Future<List<String>> _processEvent({
   required Event event,
   required IList<AllowlistedTool> allowlist,
   required HorizonConfig config,
@@ -401,7 +422,7 @@ Future<void> _processEvent({
       logger.debug(
         "Heartbeat ${event.id}: no capabilities due — skipping LLM",
       );
-      return;
+      return const [];
     }
     logger.info(
       "Heartbeat ${event.id}: ${due.length} capability(ies) due — "
@@ -644,6 +665,7 @@ Future<void> _processEvent({
   if (!isAgent) {
     _logBlue("Processing complete for ${event.id}");
   }
+  return replies;
 }
 
 Future<void> _runScheduler({
