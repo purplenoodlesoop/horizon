@@ -275,13 +275,34 @@ Future<void> _run(
     if (event.channel is TelegramChannel) {
       final cmd = parseAdminCommand(event.content);
       if (cmd != null) {
-        await _handleAdminCommand(
+        final adminReply = await _handleAdminCommand(
           event: event,
           command: cmd,
           config: config,
           envStore: envStore,
           logger: logger,
         );
+        // C: record the admin command AND its reply in history, so a
+        // natural-language follow-up ("send me this file") can resolve to
+        // what an admin command (e.g. /dream) just produced. Previously
+        // admin turns returned before the history append, so the next turn
+        // was blind to them — "send me this file" then resolved to an
+        // unrelated note instead of the working memory /dream just showed.
+        history = _addToHistory(history, event);
+        if (adminReply != null) {
+          final truncated = adminReply.length > 1500
+              ? "${adminReply.substring(0, 1499)}…"
+              : adminReply;
+          history = _addToHistory(
+            history,
+            Event(
+              id: "self_${event.id}",
+              content: "[your prior reply] $truncated",
+              channel: event.channel,
+              timestamp: DateTime.now(),
+            ),
+          );
+        }
         return;
       }
     }
@@ -887,7 +908,10 @@ Future<void> _routeScheduleReply({
   }
 }
 
-Future<void> _handleAdminCommand({
+/// Runs an admin command and returns the reply text it delivered (or
+/// null on failure), so the caller can record it in conversation
+/// history — see processEvent.
+Future<String?> _handleAdminCommand({
   required Event event,
   required AdminCommand command,
   required HorizonConfig config,
@@ -918,6 +942,7 @@ Future<void> _handleAdminCommand({
       text: reply,
       telegramToken: envStore.telegramToken,
     );
+    return reply;
   } on Exception catch (e, st) {
     logger.error("Admin command error: $e", stackTrace: st);
     try {
@@ -929,6 +954,7 @@ Future<void> _handleAdminCommand({
     } on Object {
       // Best-effort error reply.
     }
+    return null;
   }
 }
 
