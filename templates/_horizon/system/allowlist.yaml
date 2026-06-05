@@ -34,12 +34,24 @@ tools:
     command: "find {vault_path} -name '*.md' -type f 2>/dev/null | sort"
 
   - name: search_vault
-    description: Search vault files for a pattern
+    description: "Search your notes and get the MATCHING CONTENT back — path, line number, and surrounding lines — not just filenames. This is how you build context: one search shows what is actually written across your notes. Case-insensitive extended-regex; matches substrings so a stem works across languages (\"автобус\" also matches \"автобуса\"). Skips the system namespace and your personal dataview/ views."
     parameters:
       query:
         type: string
-        description: Search query (grep pattern)
-    command: "grep -rliE {query} {vault_path} --include='*.md' 2>/dev/null"
+        description: "A keyword, word-stem, or extended-regex (grep -E). Case-insensitive."
+    command: "grep -rniE --include='*.md' --exclude-dir=_horizon --exclude-dir=dataview -B1 -A2 {query} {vault_path} 2>/dev/null | sed \"s#{vault_path}/##\" | head -150"
+
+  - name: list_notes
+    description: "List every note you have, with its title — so you can see WHAT ALREADY EXISTS before searching, and never offer to create a note that is already there. Path + title, one per line. Skips the system namespace and your dataview/ views."
+    command: "find {vault_path} -name '*.md' -type f -not -path '*/_horizon/*' -not -path '*/dataview/*' 2>/dev/null | sort | while read f; do t=$(grep -m1 -iE '^(title:|# )' \"$f\" 2>/dev/null | sed -E 's/^title:[[:space:]]*//I; s/^#[[:space:]]*//'); echo \"${f#{vault_path}/}${t:+  —  $t}\"; done"
+
+  - name: read_note_and_links
+    description: "Read a note AND every note it [[links]] to, in one step — so you can follow the connections in your vault (people, related notes) and build context without re-reading each link by hand."
+    parameters:
+      path:
+        type: path
+        description: Vault-relative path to the starting note.
+    command: "f={vault_path}/{path}; cat \"$f\" 2>/dev/null; grep -oE '\\[\\[[^]|#]+' \"$f\" 2>/dev/null | sed 's/^\\[\\[//' | sort -u | while read l; do lf={vault_path}/\"$l\".md; if [ -f \"$lf\" ]; then echo; echo \"===== linked: $l =====\"; cat \"$lf\"; fi; done"
 
   - name: count_matches
     description: Counts the number of vault files whose contents match a regex, scoped to a path glob. Returns a single integer. Use whenever the user asks "how many" of something — the LLM is unreliable at counting lists by inspection over ~10 items, so reach for this instead.

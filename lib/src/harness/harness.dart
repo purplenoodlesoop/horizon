@@ -275,13 +275,34 @@ Future<void> _run(
     if (event.channel is TelegramChannel) {
       final cmd = parseAdminCommand(event.content);
       if (cmd != null) {
-        await _handleAdminCommand(
+        final adminReply = await _handleAdminCommand(
           event: event,
           command: cmd,
           config: config,
           envStore: envStore,
           logger: logger,
         );
+        // C: record the admin command AND its reply in history, so a
+        // natural-language follow-up ("send me this file") can resolve to
+        // what an admin command (e.g. /dream) just produced. Previously
+        // admin turns returned before the history append, so the next turn
+        // was blind to them — "send me this file" then resolved to an
+        // unrelated note instead of the working memory /dream just showed.
+        history = _addToHistory(history, event);
+        if (adminReply != null) {
+          final truncated = adminReply.length > 1500
+              ? "${adminReply.substring(0, 1499)}…"
+              : adminReply;
+          history = _addToHistory(
+            history,
+            Event(
+              id: "self_${event.id}",
+              content: "[your prior reply] $truncated",
+              channel: event.channel,
+              timestamp: DateTime.now(),
+            ),
+          );
+        }
         return;
       }
     }
@@ -696,7 +717,12 @@ Future<List<String>> _processEvent({
     // fallback through the real destination before continuing.
     logger.error("[${event.id}] pipeline error: $e", stackTrace: st);
     if (replies.isEmpty) {
-      const fallback = "Something went wrong on my end — please try again.";
+      // D: for a schedule/reminder event the content IS the message the
+      // user set — deliver it, never a generic error that silently
+      // discards a known reminder.
+      final fallback = ch is ScheduleChannel
+          ? event.content
+          : "Something went wrong on my end — please try again.";
       await deliverFallback(fallback);
       replies.add(fallback);
     }
@@ -713,11 +739,15 @@ Future<List<String>> _processEvent({
   // including inline mode, which previously had no safety net at all.
   if (replies.isEmpty &&
       !isHeartbeat &&
-      (live != null || ch is InlineChannel)) {
+      (live != null || ch is InlineChannel || ch is ScheduleChannel)) {
     logger.warning(
       "[${event.id}] empty completion — delivering fallback message",
     );
-    const fallback = "I didn't catch that — please try again.";
+    // D: a schedule/reminder falls back to its OWN content, not a
+    // generic "try again" that loses the reminder the user actually set.
+    final fallback = ch is ScheduleChannel
+        ? event.content
+        : "I didn't catch that — please try again.";
     await deliverFallback(fallback);
     replies.add(fallback);
   }
@@ -887,7 +917,10 @@ Future<void> _routeScheduleReply({
   }
 }
 
-Future<void> _handleAdminCommand({
+/// Runs an admin command and returns the reply text it delivered (or
+/// null on failure), so the caller can record it in conversation
+/// history — see processEvent.
+Future<String?> _handleAdminCommand({
   required Event event,
   required AdminCommand command,
   required HorizonConfig config,
@@ -918,6 +951,7 @@ Future<void> _handleAdminCommand({
       text: reply,
       telegramToken: envStore.telegramToken,
     );
+    return reply;
   } on Exception catch (e, st) {
     logger.error("Admin command error: $e", stackTrace: st);
     try {
@@ -929,6 +963,7 @@ Future<void> _handleAdminCommand({
     } on Object {
       // Best-effort error reply.
     }
+    return null;
   }
 }
 
