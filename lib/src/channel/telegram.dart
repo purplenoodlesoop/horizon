@@ -12,6 +12,38 @@ const _pollingTimeout = 30;
 
 String _generateId(int updateId) => "tg_$updateId";
 
+/// #34: durable long-poll offset. Without persistence the offset lives
+/// only in process memory, so every restart either re-polls Telegram's
+/// backlog from zero (duplicate processing) or, once advanced past
+/// queued updates, drops them. Stored under the harness-owned
+/// `_horizon/system/` subtree.
+File _tgOffsetFile(String vaultPath) =>
+    File("$vaultPath/_horizon/system/.tg_offset");
+
+int _readTgOffset(String vaultPath) {
+  try {
+    final f = _tgOffsetFile(vaultPath);
+    if (!f.existsSync()) {
+      return 0;
+    }
+    return int.tryParse(f.readAsStringSync().trim()) ?? 0;
+  } on Object {
+    return 0;
+  }
+}
+
+void _writeTgOffset(String vaultPath, int offset) {
+  try {
+    final f = _tgOffsetFile(vaultPath);
+    f.parent.createSync(recursive: true);
+    File("${f.path}.tmp")
+      ..writeAsStringSync("$offset")
+      ..renameSync(f.path);
+  } on Object {
+    // Best-effort: a persistence failure must never break polling.
+  }
+}
+
 class TelegramPoller extends StreamFx<Event> {
   TelegramPoller({
     required String botToken,
@@ -19,7 +51,10 @@ class TelegramPoller extends StreamFx<Event> {
     required String vaultPath,
     required Logger logger,
   }) : super(() async* {
-        var offset = 0;
+        // #34: resume from the persisted offset so a restart neither
+        // replays the whole backlog nor drops updates that arrived while
+        // we were down (Telegram still holds them for ~24h).
+        var offset = _readTgOffset(vaultPath);
         while (true) {
           // Pass allowed_updates explicitly so inline_query and
           // chosen_inline_result are delivered. Telegram remembers
@@ -62,6 +97,9 @@ class TelegramPoller extends StreamFx<Event> {
                 continue;
               }
               offset = updateId + 1;
+              // #34: persist the acknowledged offset so a crash/restart
+              // resumes here instead of re-polling Telegram from zero.
+              _writeTgOffset(vaultPath, offset);
               // Defence: per-update handlers (voice transcription,
               // file download, inline answer) call out to processes
               // and HTTP. Any of them throwing would otherwise tear

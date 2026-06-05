@@ -258,6 +258,10 @@ Future<void> _run(
     return null;
   }
 
+  // #33: escalating backoff for repeated heartbeat-time provider
+  // failures, so a hard-down endpoint is not retried every 60s forever
+  // (one outage previously became thousands of identical failures).
+  var consecutiveHeartbeatFailures = 0;
   Future<void> processEvent(Event event) async {
     if (isAgent) {
       _logJson({"type": "event", "id": event.id, "content": event.content});
@@ -333,8 +337,28 @@ Future<void> _run(
         );
         history = _addToHistory(history, selfEvent);
       }
-    } on Exception catch (e, st) {
+      // Provider is up (this turn completed) — clear the breaker.
+      consecutiveHeartbeatFailures = 0;
+    } on Object catch (e, st) {
+      // #29: catch Object, not just Exception — a thrown Error (e.g. a
+      // StateError from a missing template) must not escape the turn
+      // boundary unlogged and undelivered.
       logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
+      // #33: on repeated heartbeat-time failures, back off with an
+      // escalating delay so a hard-down provider isn't hammered every
+      // tick. User turns are unaffected (they reset the counter on success
+      // and a provider outage fails them anyway).
+      if (event.id.startsWith("heartbeat_")) {
+        consecutiveHeartbeatFailures++;
+        final backoff = Duration(
+          seconds: (consecutiveHeartbeatFailures * 30).clamp(0, 300),
+        );
+        logger.warning(
+          "[breaker] heartbeat failure #$consecutiveHeartbeatFailures — "
+          "backing off ${backoff.inSeconds}s",
+        );
+        await Future<void>.delayed(backoff);
+      }
     }
   }
 
@@ -495,6 +519,36 @@ Future<List<String>> _processEvent({
   var streamedAnyText = false;
   final ch = event.channel;
   final isCliHuman = ch is CliChannel && !isAgent;
+
+  // #29/#30: deterministic fallback delivery to the event's REAL
+  // destination — used both when the pipeline THROWS and when it
+  // finishes with no reply, so no live/inline/telegram turn is ever
+  // left silent.
+  Future<void> deliverFallback(String msg) async {
+    try {
+      if (ch is ScheduleChannel) {
+        await _routeScheduleReply(
+          deliver: parseDeliverTag(ch.value.deliver),
+          reply: msg,
+          envStore: envStore,
+          logger: logger,
+        );
+      } else if (live != null) {
+        await live.finalize(msg);
+      } else if (ch is TelegramChannel || ch is InlineChannel) {
+        await SendReply(
+          channel: ch,
+          text: msg,
+          telegramToken: envStore.telegramToken,
+        );
+      } else if (isCliHuman) {
+        stdout.writeln(msg);
+      }
+    } on Object catch (e) {
+      logger.error("[${event.id}] fallback delivery failed: $e");
+    }
+  }
+
   try {
     await for (final pe in pipeline) {
       switch (pe) {
@@ -635,6 +689,17 @@ Future<List<String>> _processEvent({
           }
       }
     }
+  } on Object catch (e, st) {
+    // #29: a thrown failure (provider error, tool ProcessException,
+    // malformed-JSON FormatException, timeout, or an Error) must not
+    // leave the user staring at "Thinking…". Log it and deliver a
+    // fallback through the real destination before continuing.
+    logger.error("[${event.id}] pipeline error: $e", stackTrace: st);
+    if (replies.isEmpty) {
+      const fallback = "Something went wrong on my end — please try again.";
+      await deliverFallback(fallback);
+      replies.add(fallback);
+    }
   } finally {
     typingTimer?.cancel();
     if (streamingToStdout) {
@@ -642,17 +707,18 @@ Future<List<String>> _processEvent({
     }
   }
 
-  // Issue #11: if the LLM produced zero completion tokens the pipeline
-  // yields PipelineReply(text: null) and `replies` stays empty, leaving
-  // the "Thinking…" Telegram placeholder stuck indefinitely. Detect this
-  // and finalize with a user-visible fallback so the chat is never silent.
-  if (live != null && replies.isEmpty) {
+  // Issue #11 / #30: if the LLM produced zero completion the pipeline
+  // yields no reply and `replies` stays empty, leaving the placeholder
+  // stuck. Deliver a fallback through the actual destination — now
+  // including inline mode, which previously had no safety net at all.
+  if (replies.isEmpty &&
+      !isHeartbeat &&
+      (live != null || ch is InlineChannel)) {
     logger.warning(
-      "[${event.id}] LLM returned completion=0 — "
-      "finalizing live reply with fallback message",
+      "[${event.id}] empty completion — delivering fallback message",
     );
     const fallback = "I didn't catch that — please try again.";
-    await live.finalize(fallback);
+    await deliverFallback(fallback);
     replies.add(fallback);
   }
 
@@ -830,6 +896,17 @@ Future<void> _handleAdminCommand({
 }) async {
   logger.info("[admin] ${event.id}: ${event.content}");
   try {
+    // /dream does a full-corpus LLM consolidation that can take a while.
+    // Send an immediate acknowledgement so the user isn't left waiting in
+    // silence before the rebuilt-memory summary arrives.
+    if (command is DreamCmd) {
+      await SendReply(
+        channel: event.channel,
+        text: "💤 Dreaming… consolidating long-term memory into fresh "
+            "working memory. This can take a moment.",
+        telegramToken: envStore.telegramToken,
+      );
+    }
     final reply = await ExecuteAdminCommand(
       command: command,
       vaultPath: config.vaultPath,

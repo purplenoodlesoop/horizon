@@ -28,3 +28,4 @@ node_modules/
 
 # Claude Code local settings (per-machine permission grants)
 .claude/settings.local.json
+result

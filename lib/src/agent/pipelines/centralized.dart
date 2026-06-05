@@ -3,6 +3,7 @@ import "package:fn/fn.dart";
 import "package:horizon/src/agent/agent_event.dart";
 import "package:horizon/src/agent/pipeline.dart";
 import "package:horizon/src/agent/system_prompt.dart";
+import "package:horizon/src/agent/working_state.dart";
 import "package:horizon/src/capability/capability.dart";
 import "package:horizon/src/config/config.dart";
 import "package:horizon/src/config/env_store.dart";
@@ -27,10 +28,72 @@ String _renderManifest(IList<Capability> capabilities) {
       .join("\n");
 }
 
+/// #38: ground the model's self-knowledge in its REAL, current tools.
+/// The system prompt otherwise advertises only capability descriptions
+/// and bare tool schemas, so the model infers affordances and fabricates
+/// ones it lacks (promising sends it can't do, asking for a chat_id that
+/// cannot satisfy the outbound gate). Derived from the LIVE allowlist
+/// every turn — dynamic real state, not a hand-written capability sheet.
+String _renderAffordances(IList<AllowlistedTool> allowlist) {
+  if (allowlist.isEmpty) {
+    return "";
+  }
+  final names = allowlist.map((t) => t.name).join(", ");
+  final hasTelegramSend = allowlist.any(
+    (t) => t.parameters.values.any((p) => p.type == "telegram_chat_id"),
+  );
+  final buffer = StringBuffer()
+    ..writeln()
+    ..writeln()
+    ..writeln(
+      "[Your actual tools right now] These are the ONLY actions you can "
+      "take: $names.",
+    )
+    ..writeln(
+      "If something you are asked to do has no matching tool above, you "
+      "cannot do it — say so plainly. Never claim or promise an action you "
+      "have no tool for, and never report an action as done unless its "
+      "tool returned success this turn.",
+    );
+  if (hasTelegramSend) {
+    buffer.writeln(
+      "Outbound messaging only reaches a chat that has already messaged "
+      "this bot; an unknown chat_id is rejected. You cannot initiate "
+      "contact with someone new, reach a person by @username, or look up a "
+      "chat_id — do not ask the user for one as a workaround, it cannot "
+      "work.",
+    );
+  }
+  return buffer.toString();
+}
+
 /// Builds the user message: per-event volatile content goes here so
 /// the system prompt above stays cacheable.
-String _buildUserMessage(String eventSummary, String eventContent) =>
-    "$eventSummary\n\n[User content]\n$eventContent";
+///
+/// The working-memory notes (when present) are prepended as BACKGROUND —
+/// not authority. They are the product of an explicit `/dream`
+/// consolidation, so they can be stale; the live vault and what the user
+/// says THIS turn are the source of truth. Framing them as "orient, then
+/// verify" is deliberate (#36): the previous "current and authoritative,
+/// never contradict" framing let stale/fabricated notes override reality
+/// and re-asserted the model's own inventions as user-established fact.
+String _buildUserMessage(
+  String eventSummary,
+  String eventContent,
+  String workingState,
+) {
+  final wm = workingState.trim();
+  final header = wm.isEmpty
+      ? ""
+      : "[Working notes — a background summary from your last /dream "
+          "consolidation. Use it to orient, but it may be stale: the vault "
+          "files and what the user says right now are the source of truth. "
+          "If anything here conflicts with the user this turn, the user is "
+          "right; verify against the vault before relying on a specific "
+          "fact, and never present these notes as something the user "
+          "established unless the vault confirms it.]\n$wm\n\n";
+  return "$header$eventSummary\n\n[User content]\n$eventContent";
+}
 
 final _imageMarker = RegExp(r"\[image:([^\]\s]+)\]");
 
@@ -88,13 +151,22 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
             decayThreshold,
           );
           final manifest = _renderManifest(capabilities);
-          final systemPrompt = await LoadSystemPrompt(
+          final basePrompt = await LoadSystemPrompt(
             vaultPath: config.vaultPath,
             templatesPath: config.templatesPath,
             manifest: manifest,
             heartbeatMode: heartbeatMode,
           );
-          final userMessage = _buildUserMessage(summary, event.content);
+          // #38: ground the model in its real, current affordances.
+          final systemPrompt = basePrompt + _renderAffordances(allowlist);
+          final workingState = await LoadWorkingState(
+            vaultPath: config.vaultPath,
+          );
+          final userMessage = _buildUserMessage(
+            summary,
+            event.content,
+            workingState,
+          );
 
           final currentChatId = _currentChatIdFor(event.channel);
 
@@ -151,6 +223,13 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
                   wrotePaths: result.writtenPaths,
                   hadReply: !heartbeatMode && replyText != null,
                 );
+                // #36: deliver the reply. There is no per-turn memory
+                // rewrite anymore — durable facts live in the vault
+                // (journal/knowledge/people, written by capabilities) and in
+                // the conversation record; the working notes are refreshed
+                // only by an explicit /dream. This removes the silent
+                // generative digest that fabricated/dropped facts, plus its
+                // second per-turn LLM round-trip.
                 yield PipelineReply(event: event, text: replyText);
             }
           }

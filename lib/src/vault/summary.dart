@@ -12,6 +12,31 @@ String formatChannelName(Channel<Object?> channel) => switch (channel) {
       "vault(${value.eventType}:${value.path})",
 };
 
+const _weekdays = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+
+/// #35: render a wall-clock time the model can actually trust — local
+/// time with an explicit UTC offset and the weekday — instead of a
+/// bare, zone-less ISO string it cannot reconcile with the (UTC) `now`
+/// tool. This is the model's window onto the present moment, so it must
+/// be unambiguous.
+String localIsoWithOffset(DateTime dt) {
+  final local = dt.isUtc ? dt.toLocal() : dt;
+  final off = local.timeZoneOffset;
+  final sign = off.isNegative ? "-" : "+";
+  final hh = off.inHours.abs().toString().padLeft(2, "0");
+  final mm = (off.inMinutes.abs() % 60).toString().padLeft(2, "0");
+  final weekday = _weekdays[(local.weekday - 1) % 7];
+  return "${local.toIso8601String()}$sign$hh:$mm ($weekday)";
+}
+
 String formatEventSummary(
   Event event,
   IList<Event> recentEvents,
@@ -24,7 +49,7 @@ String formatEventSummary(
   );
   final buffer = StringBuffer()
     ..writeln("[Event Summary]")
-    ..writeln("Time: ${event.timestamp.toIso8601String()}")
+    ..writeln("Time: ${localIsoWithOffset(event.timestamp)}")
     ..writeln("Channel: ${formatChannelName(event.channel)}")
     ..writeln("Content: ${event.content}");
   if (event.parentId != null) {
@@ -34,7 +59,7 @@ String formatEventSummary(
     buffer.writeln("\n[Recent Events]");
     for (final e in relevant) {
       buffer.writeln(
-        "- [${e.timestamp.toIso8601String()}] "
+        "- [${localIsoWithOffset(e.timestamp)}] "
         "${formatChannelName(e.channel)}: ${e.content}",
       );
     }

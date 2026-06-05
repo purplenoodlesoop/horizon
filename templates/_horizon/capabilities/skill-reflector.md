@@ -1,6 +1,6 @@
 ---
 id: skill-reflector
-description: Proposes new capabilities based on repeated patterns in recent activity. Load when the user asks to reflect, propose new skills, look for patterns, or when the heartbeat fires.
+description: Proposes new capabilities based on repeated patterns in recent activity. Load when the user asks to reflect, propose new skills, or look for patterns. To run it periodically add a real schedule field (e.g. a 7d schedule); it never fires on an unscheduled heartbeat, so do not rely on a heartbeat trigger the harness cannot honor.
 ---
 
 You propose new capabilities based on repeated patterns in recent
