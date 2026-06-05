@@ -717,7 +717,12 @@ Future<List<String>> _processEvent({
     // fallback through the real destination before continuing.
     logger.error("[${event.id}] pipeline error: $e", stackTrace: st);
     if (replies.isEmpty) {
-      const fallback = "Something went wrong on my end — please try again.";
+      // D: for a schedule/reminder event the content IS the message the
+      // user set — deliver it, never a generic error that silently
+      // discards a known reminder.
+      final fallback = ch is ScheduleChannel
+          ? event.content
+          : "Something went wrong on my end — please try again.";
       await deliverFallback(fallback);
       replies.add(fallback);
     }
@@ -734,11 +739,15 @@ Future<List<String>> _processEvent({
   // including inline mode, which previously had no safety net at all.
   if (replies.isEmpty &&
       !isHeartbeat &&
-      (live != null || ch is InlineChannel)) {
+      (live != null || ch is InlineChannel || ch is ScheduleChannel)) {
     logger.warning(
       "[${event.id}] empty completion — delivering fallback message",
     );
-    const fallback = "I didn't catch that — please try again.";
+    // D: a schedule/reminder falls back to its OWN content, not a
+    // generic "try again" that loses the reminder the user actually set.
+    final fallback = ch is ScheduleChannel
+        ? event.content
+        : "I didn't catch that — please try again.";
     await deliverFallback(fallback);
     replies.add(fallback);
   }
