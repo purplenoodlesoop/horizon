@@ -3,6 +3,7 @@ import "package:fn/fn.dart";
 import "package:horizon/src/agent/agent_event.dart";
 import "package:horizon/src/agent/pipeline.dart";
 import "package:horizon/src/agent/system_prompt.dart";
+import "package:horizon/src/agent/working_state.dart";
 import "package:horizon/src/capability/capability.dart";
 import "package:horizon/src/config/config.dart";
 import "package:horizon/src/config/env_store.dart";
@@ -29,8 +30,27 @@ String _renderManifest(IList<Capability> capabilities) {
 
 /// Builds the user message: per-event volatile content goes here so
 /// the system prompt above stays cacheable.
-String _buildUserMessage(String eventSummary, String eventContent) =>
-    "$eventSummary\n\n[User content]\n$eventContent";
+///
+/// The persistent working memory (when non-empty) is prepended as the
+/// most prominent block. It rides in the user message rather than the
+/// system prompt deliberately: the system prompt stays a stable,
+/// cacheable spine, while the continuously-rewritten working memory is
+/// volatile. It is injected on EVERY turn — the assistant never has to
+/// choose to recall it.
+String _buildUserMessage(
+  String eventSummary,
+  String eventContent,
+  String workingState,
+) {
+  final wm = workingState.trim();
+  final header = wm.isEmpty
+      ? ""
+      : "[Working memory — your continuously-integrated understanding so "
+          "far. It is current and authoritative; act consistently with it "
+          "without being asked, and never contradict it unless the user "
+          "changes it this turn.]\n$wm\n\n";
+  return "$header$eventSummary\n\n[User content]\n$eventContent";
+}
 
 final _imageMarker = RegExp(r"\[image:([^\]\s]+)\]");
 
@@ -94,9 +114,20 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
             manifest: manifest,
             heartbeatMode: heartbeatMode,
           );
-          final userMessage = _buildUserMessage(summary, event.content);
+          final workingState = await LoadWorkingState(
+            vaultPath: config.vaultPath,
+          );
+          final userMessage = _buildUserMessage(
+            summary,
+            event.content,
+            workingState,
+          );
 
           final currentChatId = _currentChatIdFor(event.channel);
+
+          // Tool outcomes observed this turn, fed to the digestion pass so
+          // working memory records what actually happened (incl. failures).
+          final toolOutcomes = <String>[];
 
           final imagePaths = _extractImagePaths(
             event.content,
@@ -126,6 +157,7 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
               case AgentToolStarted(:final name, :final args):
                 yield PipelineToolStarted(name: name, args: args);
               case AgentToolFinished(:final name, :final ok):
+                toolOutcomes.add("$name → ${ok ? "ok" : "FAILED"}");
                 yield PipelineToolFinished(name: name, ok: ok);
               case AgentFinished(:final result):
                 final suppressed = heartbeatMode &&
@@ -151,7 +183,32 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
                   wrotePaths: result.writtenPaths,
                   hadReply: !heartbeatMode && replyText != null,
                 );
+                // Deliver the reply first, then integrate the turn into
+                // persistent working memory. Heartbeats are skipped to bound
+                // token cost. Digestion is best-effort: any failure is logged
+                // and never breaks the reply that already went out.
                 yield PipelineReply(event: event, text: replyText);
+                final didSomething = replyText != null ||
+                    result.toolsCalled.isNotEmpty ||
+                    result.writtenPaths.isNotEmpty;
+                if (!heartbeatMode && didSomething) {
+                  try {
+                    await DigestWorkingState(
+                      envStore: envStore,
+                      vaultPath: config.vaultPath,
+                      priorState: workingState,
+                      inbound: event.content,
+                      reply: replyText,
+                      toolOutcomes: toolOutcomes.toIList(),
+                      logger: logger,
+                    );
+                  } on Object catch (e, st) {
+                    logger.warning(
+                      "[$_agentId] working-memory digest failed: $e",
+                      stackTrace: st,
+                    );
+                  }
+                }
             }
           }
         });

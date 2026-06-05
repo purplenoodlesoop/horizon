@@ -830,6 +830,17 @@ Future<void> _handleAdminCommand({
 }) async {
   logger.info("[admin] ${event.id}: ${event.content}");
   try {
+    // /dream does a full-corpus LLM consolidation that can take a while.
+    // Send an immediate acknowledgement so the user isn't left waiting in
+    // silence before the rebuilt-memory summary arrives.
+    if (command is DreamCmd) {
+      await SendReply(
+        channel: event.channel,
+        text: "💤 Dreaming… consolidating long-term memory into fresh "
+            "working memory. This can take a moment.",
+        telegramToken: envStore.telegramToken,
+      );
+    }
     final reply = await ExecuteAdminCommand(
       command: command,
       vaultPath: config.vaultPath,

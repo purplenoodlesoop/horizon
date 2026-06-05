@@ -1,6 +1,7 @@
 import "dart:io";
 
 import "package:fn/fn.dart";
+import "package:horizon/src/agent/working_state.dart";
 import "package:horizon/src/config/env_store.dart";
 import "package:horizon/src/config/preferences.dart";
 import "package:mark/mark.dart";
@@ -51,6 +52,10 @@ final class DiffCmd extends AdminCommand {
 
 final class HelpCmd extends AdminCommand {
   const HelpCmd();
+}
+
+final class DreamCmd extends AdminCommand {
+  const DreamCmd();
 }
 
 final class MalformedAdminCmd extends AdminCommand {
@@ -106,6 +111,8 @@ AdminCommand? parseAdminCommand(String text) {
       return DiffCmd(parts[1]);
     case "/help":
       return const HelpCmd();
+    case "/dream":
+      return const DreamCmd();
     default:
       return null;
   }
@@ -166,6 +173,14 @@ Future<_AdminResult> _dispatch({
       DiffCmd(:final id) =>
           _AdminResult(reply: _diff(vaultPath: vaultPath, id: id)),
       HelpCmd() => const _AdminResult(reply: _helpText),
+      DreamCmd() => _AdminResult(
+          reply: await DreamWorkingState(
+            envStore: envStore,
+            vaultPath: vaultPath,
+            logger: logger,
+          ),
+          auditLine: "${_nowIso()} dream (working memory rebuilt)",
+        ),
       MalformedAdminCmd(:final command, :final usage) =>
           _AdminResult(reply: "<b>$command</b>\n$usage"),
     };
@@ -303,6 +318,7 @@ const _helpText = '''
 /diff <i>id</i> — diff proposed vs active version
 /quiet — disable streaming "Thinking..." UI
 /loud — enable streaming UI
+/dream — rebuild working memory from scratch by consolidating long-term memory
 /version — show commit hashes / vault path
 /help — this message
 ''';
