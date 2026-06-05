@@ -124,19 +124,89 @@ Future<void> _sendTelegram({
   required String chatId,
   required String text,
 }) async {
-  final uri = Uri.parse(
-    "https://api.telegram.org/bot$token/sendMessage",
-  );
-  await http.post(uri, body: {
+  // #28: split over-cap bodies into ordered parts (no blind truncation).
+  // #27: every part's delivery is verified, not fire-and-forget.
+  final chunks = chunkForTelegram(normalizeMarkdownToTelegramHtml(text));
+  for (final chunk in chunks) {
+    await _postTelegramMessage(token: token, chatId: chatId, html: chunk);
+  }
+}
+
+/// Sends one Telegram message and VERIFIES it landed (HTTP 200 + `ok`).
+/// On an HTML-parse/4xx failure, retries once as plain text so the user
+/// still receives the content. Throws if the message could not be
+/// delivered at all, so a lost reply is surfaced upstream — never
+/// silently counted as a successful turn (#27).
+Future<void> _postTelegramMessage({
+  required String token,
+  required String chatId,
+  required String html,
+}) async {
+  final uri = Uri.parse("https://api.telegram.org/bot$token/sendMessage");
+  final res = await http.post(uri, body: {
     "chat_id": chatId,
-    "text": normalizeMarkdownToTelegramHtml(text),
-    // The standing prompt instructs the orchestrator to format
-    // Telegram replies as Telegram-flavoured HTML. Markdown is
-    // never sent here intentionally; if the model emits
-    // un-escaped < > & literals we'll get a 400 on those replies
-    // (visible in logs) but won't crash.
+    "text": html,
     "parse_mode": "HTML",
   });
+  if (_telegramOk(res)) {
+    return;
+  }
+  // HTML/parse or transient failure: retry once as plain text.
+  final plain = await http.post(uri, body: {
+    "chat_id": chatId,
+    "text": _stripHtml(html),
+  });
+  if (_telegramOk(plain)) {
+    return;
+  }
+  throw http.ClientException(
+    "sendMessage not delivered: ${res.statusCode} ${res.body}",
+  );
+}
+
+bool _telegramOk(http.Response res) {
+  if (res.statusCode != 200) {
+    return false;
+  }
+  try {
+    final body = jsonDecode(res.body);
+    return body is Map && body["ok"] == true;
+  } on FormatException {
+    return false;
+  }
+}
+
+/// Telegram hard-caps message text at 4096 chars. Split longer bodies
+/// into ordered parts on paragraph/line/word boundaries — never a blind
+/// mid-token cut — so a long reply is delivered in full (#28). Tags
+/// rarely span paragraph breaks; any part Telegram rejects as HTML is
+/// retried as plain text by [_postTelegramMessage].
+const telegramMaxLen = 4096;
+
+List<String> chunkForTelegram(String s, {int max = telegramMaxLen}) {
+  if (s.length <= max) {
+    return [s];
+  }
+  final parts = <String>[];
+  var rest = s;
+  while (rest.length > max) {
+    var cut = rest.lastIndexOf("\n\n", max);
+    if (cut < max ~/ 2) {
+      cut = rest.lastIndexOf("\n", max);
+    }
+    if (cut < max ~/ 2) {
+      cut = rest.lastIndexOf(" ", max);
+    }
+    if (cut < max ~/ 2) {
+      cut = max;
+    }
+    parts.add(rest.substring(0, cut).trimRight());
+    rest = rest.substring(cut).trimLeft();
+  }
+  if (rest.isNotEmpty) {
+    parts.add(rest);
+  }
+  return parts;
 }
 
 final _mdCodeSpan = RegExp(r"`([^`\n]+?)`");
@@ -306,7 +376,11 @@ class TelegramLiveReply {
     _scheduledTimer?.cancel();
     _scheduledTimer = null;
     _mode = _LiveMode.finalized;
-    final text = _trunc(normalizeMarkdownToTelegramHtml(htmlText), 4096);
+    // #28: deliver the full answer — edit the live message with the
+    // first part, then send any overflow as ordered follow-ups, instead
+    // of blindly truncating at 4096.
+    final chunks = chunkForTelegram(normalizeMarkdownToTelegramHtml(htmlText));
+    final text = chunks.first;
     // Wait for any in-flight flush to complete before issuing the
     // final edit so the order on the wire matches the order here.
     while (_flushing) {
@@ -315,16 +389,27 @@ class TelegramLiveReply {
     _pendingText = text;
     _pendingAsHtml = true;
     _dirty = true;
+    await _finalizeFirstChunk(text);
+    for (final extra in chunks.skip(1)) {
+      try {
+        await _postTelegramMessage(token: token, chatId: chatId, html: extra);
+      } on Object {
+        // Best-effort: the first (live) part already landed.
+      }
+    }
+  }
+
+  /// Edits/sends the first part of the final answer into the live
+  /// message, with the existing HTML → plain → fresh-send recovery
+  /// ladder so the user is never left stuck on "Thinking…".
+  Future<void> _finalizeFirstChunk(String text) async {
     try {
       await _doSendOrEdit(text, asHtml: true);
       _dirty = false;
       return;
     } on Object {
       // HTML parse failure (e.g. the model emitted `<br/>` or an
-      // unclosed tag). Recover by sending a plain-text version — at
-      // worst the user sees the raw HTML markers, but they actually
-      // see the answer instead of being stuck on the "Thinking…"
-      // placeholder.
+      // unclosed tag). Recover by sending a plain-text version.
     }
     final plain = _stripHtml(text);
     try {
@@ -332,8 +417,7 @@ class TelegramLiveReply {
       _dirty = false;
       return;
     } on Object {
-      // Edit failed too — try a fresh plain-text send so the user
-      // gets something instead of nothing.
+      // Edit failed too — try a fresh plain-text send.
     }
     try {
       final id = await _send(plain, asHtml: false);
