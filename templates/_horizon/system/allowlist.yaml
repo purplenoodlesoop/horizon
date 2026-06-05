@@ -173,5 +173,5 @@ tools:
       caption:
         type: string
         description: "Optional plain-text caption shown beneath the attachment in Telegram. Max ~1000 chars. Use an empty string for no caption. Plain text only — HTML markup is rendered literally in captions."
-    command: "curl -sS --max-time 60 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument\" -F chat_id={chat_id} -F document=@{vault_path}/{path} -F caption={caption}"
+    command: "f={vault_path}/{path}; m=application/octet-stream; case \"$f\" in *.md|*.markdown) m=text/markdown;; *.txt|*.log) m=text/plain;; *.json) m=application/json;; *.csv) m=text/csv;; *.html|*.htm) m=text/html;; *.yaml|*.yml) m=application/x-yaml;; *.pdf) m=application/pdf;; *.png) m=image/png;; *.jpg|*.jpeg) m=image/jpeg;; esac; curl -sS --max-time 60 -X POST \"https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument\" -F chat_id={chat_id} -F \"document=@$f;type=$m\" -F caption={caption}"
 
