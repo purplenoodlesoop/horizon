@@ -258,6 +258,10 @@ Future<void> _run(
     return null;
   }
 
+  // #33: escalating backoff for repeated heartbeat-time provider
+  // failures, so a hard-down endpoint is not retried every 60s forever
+  // (one outage previously became thousands of identical failures).
+  var consecutiveHeartbeatFailures = 0;
   Future<void> processEvent(Event event) async {
     if (isAgent) {
       _logJson({"type": "event", "id": event.id, "content": event.content});
@@ -333,11 +337,28 @@ Future<void> _run(
         );
         history = _addToHistory(history, selfEvent);
       }
+      // Provider is up (this turn completed) — clear the breaker.
+      consecutiveHeartbeatFailures = 0;
     } on Object catch (e, st) {
       // #29: catch Object, not just Exception — a thrown Error (e.g. a
       // StateError from a missing template) must not escape the turn
       // boundary unlogged and undelivered.
       logger.error("Pipeline error for ${event.id}: $e", stackTrace: st);
+      // #33: on repeated heartbeat-time failures, back off with an
+      // escalating delay so a hard-down provider isn't hammered every
+      // tick. User turns are unaffected (they reset the counter on success
+      // and a provider outage fails them anyway).
+      if (event.id.startsWith("heartbeat_")) {
+        consecutiveHeartbeatFailures++;
+        final backoff = Duration(
+          seconds: (consecutiveHeartbeatFailures * 30).clamp(0, 300),
+        );
+        logger.warning(
+          "[breaker] heartbeat failure #$consecutiveHeartbeatFailures — "
+          "backing off ${backoff.inSeconds}s",
+        );
+        await Future<void>.delayed(backoff);
+      }
     }
   }
 
