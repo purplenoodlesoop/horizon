@@ -22,4 +22,11 @@ two todos.
 Search before creating to avoid duplicates. When closing a task, set
 `done: true` rather than deleting the file.
 
+When listing todos or answering "what's pending", first call `now`, then
+check each open task's dates (its `created` date and any due/scheduled
+date in the body). Treat any dated item whose date is already in the past
+as **overdue**: surface it as overdue and offer to close or reschedule it
+— never report a long-past dated item as simply "pending". Otherwise
+stale, never-closed todos accumulate as false pending state.
+
 Reply confirming what was created, updated, or closed.
