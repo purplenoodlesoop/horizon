@@ -61,8 +61,8 @@ tools:
     command: "rm -f {vault_path}/{path}"
 
   - name: now
-    description: "Returns the current UTC datetime, weekday name, ISO week, and ISO day-of-week (1=Mon..7=Sun). Format: `YYYY-MM-DDTHH:MM:SSZ Weekday (week NN, day N)` (e.g. `2026-05-09T18:23:11Z Saturday (week 19, day 6)`). Use whenever you need to know the time, the date, what day of the week it is, or to compute a date relative to now. Always reach for this rather than guessing the weekday from the date."
-    command: "date -u +'%Y-%m-%dT%H:%M:%SZ %A (week %V, day %u)'"
+    description: "Returns the current LOCAL datetime WITH its explicit UTC offset, weekday name, ISO week, and ISO day-of-week (1=Mon..7=Sun). Format: `YYYY-MM-DDTHH:MM:SS+OO:OO Weekday (week NN, day N)` (e.g. `2026-05-09T21:23:11+03:00 Saturday (week 19, day 6)`). This IS the user's real wall-clock time — use it whenever you need the time, the date, the weekday, or to compute a date relative to now. The offset is explicit so you never guess the timezone; pass times back to schedule_* in this same offset-qualified form."
+    command: "date +'%Y-%m-%dT%H:%M:%S%:z %A (week %V, day %u)'"
 
   - name: list_files_glob
     description: List vault files matching a glob pattern. Two modes - if the pattern contains a slash, it's matched against the path relative to vault root (e.g. "todos/*.md" finds md files directly under todos/, "_horizon/turns/*.md" finds turn records). If the pattern has no slash, it's matched against the basename anywhere in the vault recursively (e.g. "*.json" finds all JSON files). Note - "*" never crosses "/", and "**" is NOT supported - use a basename-only pattern for "anywhere recursive".
@@ -104,7 +104,7 @@ tools:
         description: "Kebab-case unique identifier, e.g. 'call-mom-friday' or 'check-deploy-tonight'. Should be descriptive — the user reads it in /list-schedules."
       fire_at:
         type: string
-        description: "Either an ISO-8601 UTC timestamp ('2026-05-15T14:00Z') OR a relative duration ('30m', '2h', '1d', '1w'). Always include the trailing 'Z' on absolute timestamps so it's unambiguously UTC."
+        description: "Either an ISO-8601 timestamp WITH its UTC offset — the same offset-qualified local form the `now` tool returns, e.g. '2026-05-15T14:00:00+03:00' — OR a relative duration ('30m', '2h', '1d', '1w'). Take the offset from `now` so the fire time is unambiguous; the scheduler converts it to UTC internally."
       prompt:
         type: string
         description: "The user-message text the orchestrator will receive when the reminder fires. Phrase it as if the user just sent the message — e.g. 'Time to call mom — tell me what to say.'"
@@ -121,7 +121,7 @@ tools:
         description: "Kebab-case unique identifier, e.g. 'morning-standup' or 'weekly-review'."
       cron:
         type: string
-        description: "5-field cron expression: 'minute hour day-of-month month day-of-week'. All UTC. Examples: '0 9 * * 1-5' (weekdays 09:00 UTC), '0 17 * * 5' (Friday 17:00), '*/15 * * * *' is NOT supported (no step values yet) — use explicit list '0,15,30,45 * * * *'."
+        description: "5-field cron expression: 'minute hour day-of-month month day-of-week'. Evaluated in UTC, so convert the user's LOCAL time to UTC using the offset from `now` (e.g. 'every weekday 9am' at +03:00 → '0 6 * * 1-5'). '*/15 * * * *' step values are NOT supported — use an explicit list '0,15,30,45 * * * *'."
       prompt:
         type: string
         description: "The user-message text the orchestrator will receive on each fire."
