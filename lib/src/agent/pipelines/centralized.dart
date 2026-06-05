@@ -11,6 +11,7 @@ import "package:horizon/src/event/event.dart";
 import "package:horizon/src/harness/turn_store.dart";
 import "package:horizon/src/llm/client.dart";
 import "package:horizon/src/tool/allowlist.dart";
+import "package:horizon/src/tool/security.dart";
 import "package:horizon/src/vault/summary.dart";
 import "package:mark/mark.dart";
 
@@ -28,13 +29,18 @@ String _renderManifest(IList<Capability> capabilities) {
       .join("\n");
 }
 
-/// #38: ground the model's self-knowledge in its REAL, current tools.
-/// The system prompt otherwise advertises only capability descriptions
-/// and bare tool schemas, so the model infers affordances and fabricates
-/// ones it lacks (promising sends it can't do, asking for a chat_id that
-/// cannot satisfy the outbound gate). Derived from the LIVE allowlist
-/// every turn — dynamic real state, not a hand-written capability sheet.
-String _renderAffordances(IList<AllowlistedTool> allowlist) {
+/// A (#38 superseded): ground the model in its REAL tools AND its REAL
+/// reachable set. The prompt otherwise advertises only descriptions and
+/// bare schemas, so the model infers affordances and fabricates ones it
+/// lacks — promising sends it cannot do, offering a chat_id workaround
+/// the outbound gate will always reject. Derived from the LIVE allowlist
+/// + the actual `_horizon/messages/` roster every turn: dynamic real
+/// state, not a hand-written sheet and not generic "don't lie" prose.
+String _renderAffordances(
+  IList<AllowlistedTool> allowlist,
+  String vaultPath,
+  Set<String> allowedUsernames,
+) {
   if (allowlist.isEmpty) {
     return "";
   }
@@ -56,12 +62,24 @@ String _renderAffordances(IList<AllowlistedTool> allowlist) {
       "tool returned success this turn.",
     );
   if (hasTelegramSend) {
+    final reachable = loadAllowedChatIds(vaultPath);
+    final reachableStr = reachable.isEmpty
+        ? "(no one has messaged this bot yet)"
+        : reachable.join(", ");
+    final usernamesStr = allowedUsernames.isEmpty
+        ? "(none configured)"
+        : allowedUsernames.map((u) => "@$u").join(", ");
     buffer.writeln(
-      "Outbound messaging only reaches a chat that has already messaged "
-      "this bot; an unknown chat_id is rejected. You cannot initiate "
-      "contact with someone new, reach a person by @username, or look up a "
-      "chat_id — do not ask the user for one as a workaround, it cannot "
-      "work.",
+      "[Who you can actually reach] You can send Telegram messages ONLY to "
+      "these chat_ids, because they have already messaged this bot: "
+      "$reachableStr. The only usernames allowed to talk to this bot at all "
+      "are: $usernamesStr. Anyone else — any other @username — is "
+      "UNREACHABLE: you have no tool to message them. chat_ids are derived "
+      "ONLY from people who have messaged this bot, so the user cannot hand "
+      "you one, and asking for a chat_id does nothing. If asked to message "
+      "someone not in the reachable list above, state plainly that you "
+      "cannot reach them and why — never offer a 'send me their chat_id' or "
+      "similar workaround as if it would let you reach them.",
     );
   }
   return buffer.toString();
@@ -157,8 +175,14 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
             manifest: manifest,
             heartbeatMode: heartbeatMode,
           );
-          // #38: ground the model in its real, current affordances.
-          final systemPrompt = basePrompt + _renderAffordances(allowlist);
+          // A: ground the model in its real affordances AND real reachable
+          // roster (live allowlist + _horizon/messages/).
+          final systemPrompt = basePrompt +
+              _renderAffordances(
+                allowlist,
+                config.vaultPath,
+                envStore.telegramUsernames,
+              );
           final workingState = await LoadWorkingState(
             vaultPath: config.vaultPath,
           );
