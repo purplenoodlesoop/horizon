@@ -1,6 +1,6 @@
+import "dart:async";
 import "dart:io";
 
-import "package:fast_immutable_collections/fast_immutable_collections.dart";
 import "package:fn/fn.dart";
 import "package:horizon/src/config/env_store.dart";
 import "package:mark/mark.dart";
@@ -12,12 +12,16 @@ const _stateFile = "working.md";
 String workingStatePath(String vaultPath) =>
     "$vaultPath/$_stateSubdir/$_stateFile";
 
-/// Reads the persistent, always-loaded working memory for this vault.
+/// Reads the consolidated working-memory notes for this vault.
 ///
-/// This document is injected into the orchestrator's context on EVERY
-/// turn (see `centralized.dart`). It is the integrated, continuously
-/// reconciled understanding the assistant acts from — never a file the
-/// model has to choose to retrieve. Returns "" on cold start (no file).
+/// This document is the product of an explicit, user-invoked `/dream`
+/// consolidation — NOT a silent per-turn LLM rewrite (that mechanism was
+/// removed in 0.2.0, #36, because it fabricated/dropped facts and
+/// laundered the model's own inventions into authoritative memory). It is
+/// injected each turn as BACKGROUND notes (see `centralized.dart`), not as
+/// inviolable authority: the assistant starts from a useful summary but
+/// reconstructs the present truth from the live vault and the user's
+/// current words. Returns "" on cold start (no file).
 class LoadWorkingState extends Fx<String> {
   LoadWorkingState({required String vaultPath})
       : super(() {
@@ -29,132 +33,17 @@ class LoadWorkingState extends Fx<String> {
         });
 }
 
-const _digestSystemPrompt = '''
-You are the memory-consolidation process for a personal assistant.
-You maintain ONE compact, always-current "working memory" document that
-is injected into the assistant's context on EVERY turn. The assistant
-acts directly from this document — it is not optional background, it is
-the ground the assistant relies on. Your job is to keep it true and
-current by integrating the latest turn.
-
-You receive the current working memory and a record of the latest turn
-(what the user said, what the assistant replied, and which tools were
-called with whether each SUCCEEDED or FAILED).
-
-Rewrite the working memory so it integrates the latest turn. Rules:
-- Output ONLY the new working-memory markdown. No preamble, no code fences.
-- Integrate, do not append-log. Fold each new fact into the right place.
-- Resolve contradictions: newest information wins; DELETE what it
-  overrode. Never keep two conflicting statements side by side.
-- Keep durable things only: who the user is; identity the user has
-  established about the assistant (name, gender/grammatical gender, how
-  to be addressed, tone/persona); standing preferences and directives;
-  important facts about people and projects; and currently-open threads
-  (questions awaiting an answer, tasks in progress).
-- Record OUTCOMES, not intentions. If a tool FAILED, record that the
-  action did NOT happen. NEVER record a failed or impossible action as done.
-- Drop transient chit-chat and anything now stale or resolved.
-- Keep it tight — under ~250 lines. Compress aggressively.
-- Do NOT invent anything. Record only what the interaction established.
-  If the current memory is empty and the turn established nothing
-  durable, return the memory essentially unchanged (or empty).
-
-Suggested structure (omit any empty section):
-## Identity (who the assistant is, as the user established it)
-## User
-## People & projects
-## Standing directives & preferences
-## Open threads
-## Recent outcomes
-''';
-
-/// Consolidates the latest turn into the persistent working memory via a
-/// single non-streaming LLM call, then writes it back to disk.
-///
-/// Best-effort and self-contained: it constructs its own LLM client from
-/// the env snapshot, and the caller is expected to guard the await so a
-/// digestion failure never breaks the reply path.
-class DigestWorkingState extends Fx<void> {
-  DigestWorkingState({
-    required EnvStore envStore,
-    required String vaultPath,
-    required String priorState,
-    required String inbound,
-    required String? reply,
-    required IList<String> toolOutcomes,
-    required Logger logger,
-  }) : super(() async {
-          final turn = StringBuffer()
-            ..writeln("### User said")
-            ..writeln(inbound.trim().isEmpty ? "(nothing)" : inbound.trim())
-            ..writeln()
-            ..writeln("### Assistant replied")
-            ..writeln(
-              (reply ?? "").trim().isEmpty ? "(no reply)" : reply!.trim(),
-            );
-          if (toolOutcomes.isNotEmpty) {
-            turn
-              ..writeln()
-              ..writeln("### Tools called this turn (with outcome)");
-            for (final t in toolOutcomes) {
-              turn.writeln("- $t");
-            }
-          }
-
-          final userMsg = StringBuffer()
-            ..writeln("## Current working memory")
-            ..writeln(
-              priorState.trim().isEmpty
-                  ? "(empty — cold start)"
-                  : priorState.trim(),
-            )
-            ..writeln()
-            ..writeln("## Latest turn to integrate")
-            ..writeln(turn.toString().trimRight());
-
-          final client = OpenAIClient.withApiKey(
-            envStore.llmToken,
-            baseUrl: envStore.llmUrl,
-          );
-          try {
-            final res = await client.chat.completions.create(
-              ChatCompletionCreateRequest(
-                model: envStore.llmModel,
-                messages: [
-                  ChatMessage.system(_digestSystemPrompt),
-                  ChatMessage.user(userMsg.toString()),
-                ],
-              ),
-            );
-            final next = res.choices.firstOrNull?.message.content?.trim();
-            if (next == null || next.isEmpty) {
-              logger.warning(
-                "[digest] empty consolidation result — keeping prior state",
-              );
-              return;
-            }
-            final file = File(workingStatePath(vaultPath));
-            file.parent.createSync(recursive: true);
-            file.writeAsStringSync("$next\n");
-            logger.debug(
-              "[digest] working memory updated (${next.length} chars)",
-            );
-          } finally {
-            client.close();
-          }
-        });
-}
-
 const _dreamSystemPrompt = '''
 You are the dreaming process for a personal assistant — the deep,
-from-scratch memory consolidation that runs on request when the
-incremental digest has drifted, gone stale, or needs a clean reset.
+from-scratch memory consolidation that runs ONLY when the user asks for
+it (`/dream`).
 
 You are given the assistant's long-term memory: its notes, people files,
 journal, knowledge base, and recent conversations. From ALL of it,
-SYNTHESISE — from scratch — the single "working memory" document that is
-injected into the assistant's context on every turn and that it acts
-directly from.
+SYNTHESISE — from scratch — a single "working memory" document of
+BACKGROUND NOTES the assistant starts each turn from. It is not the
+source of truth (the vault files and the user are); it is an orientation
+summary.
 
 Rules:
 - Output ONLY the working-memory markdown. No preamble, no code fences.
@@ -169,14 +58,9 @@ Rules:
   important facts about people and projects; genuinely open threads.
 - Drop transient chit-chat and anything resolved or stale.
 - Keep it tight — under ~250 lines. This is working memory, not an archive.
-- Do NOT invent anything. Record only what the memory actually establishes.
-
-Suggested structure (omit any empty section):
-## Identity (who the assistant is, as the user established it)
-## User
-## People & projects
-## Standing directives & preferences
-## Open threads
+- Do NOT invent anything. Record only what the memory actually establishes;
+  attribute identity/preferences only where the USER actually established
+  them — never promote your own phrasing into a user-stated fact.
 ''';
 
 /// Subtrees that are configuration or derived state, not memory.
@@ -187,7 +71,19 @@ const _dreamExcludedDirs = {
   "_horizon/state",
   "_horizon/turns",
   "_horizon/admin-log",
+  "_horizon/schedules",
 };
+
+/// Basenames of the DERIVED working-memory store (and model-authored
+/// look-alikes of it). Never fed back into a rebuild: re-ingesting a
+/// stale or fabricated memory snapshot is the `/dream` re-poison route
+/// (#37) — e.g. a `working-memory.md` the model once wrote by hand at the
+/// vault root, outside the excluded `_horizon/state` subtree.
+const _memoryStoreBasenames = {"working.md", "working-memory.md"};
+
+/// Wall-clock cap on the dream LLM call so a hung provider can't leave
+/// `/dream` spinning forever (#33).
+const _dreamTimeout = Duration(seconds: 120);
 
 /// Char budget for the corpus fed to the dream. Most-recent-first, so
 /// the freshest memory survives truncation on large vaults.
@@ -198,13 +94,29 @@ String _escapeHtml(String s) => s
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 
+/// Boundary-aware preview for the `/dream` confirmation: cut on a line
+/// boundary (never mid-token) and label it, instead of a blind 600-char
+/// substring that lands inside an arbitrary sentence (#37).
+String _dreamPreview(String s, int max) {
+  if (s.length <= max) {
+    return s;
+  }
+  var cut = s.lastIndexOf("\n", max);
+  if (cut < max ~/ 2) {
+    cut = max;
+  }
+  return "${s.substring(0, cut).trimRight()}\n"
+      "… (preview — full memory in _horizon/state/working.md)";
+}
+
 ({String corpus, int files}) _collectMemoryCorpus(String vaultPath) {
   final root = Directory(vaultPath);
   if (!root.existsSync()) {
     return (corpus: "", files: 0);
   }
-  String rel(String path) =>
-      path.startsWith("$vaultPath/") ? path.substring(vaultPath.length + 1) : path;
+  String rel(String path) => path.startsWith("$vaultPath/")
+      ? path.substring(vaultPath.length + 1)
+      : path;
 
   final files = <File>[];
   for (final e in root.listSync(recursive: true, followLinks: false)) {
@@ -213,6 +125,11 @@ String _escapeHtml(String s) => s
     }
     final r = rel(e.path);
     if (_dreamExcludedDirs.any((d) => r == d || r.startsWith("$d/"))) {
+      continue;
+    }
+    if (_memoryStoreBasenames.contains(r.split("/").last)) {
+      // #37: never re-ingest the derived working-memory store or a
+      // model-authored look-alike — that is the re-poison route.
       continue;
     }
     files.add(e);
@@ -246,7 +163,7 @@ String _escapeHtml(String s) => s
   return (corpus: buffer.toString(), files: included);
 }
 
-/// Rebuilds the working memory from scratch by reading the vault's
+/// Rebuilds the working-memory notes from scratch by reading the vault's
 /// long-term memory (notes, people, journal, knowledge, recent
 /// conversations — but not config/derived state) and synthesising a
 /// fresh `working.md` in a single LLM pass. Triggered by `/dream`.
@@ -270,17 +187,20 @@ class DreamWorkingState extends Fx<String> {
             baseUrl: envStore.llmUrl,
           );
           try {
-            final res = await client.chat.completions.create(
-              ChatCompletionCreateRequest(
-                model: envStore.llmModel,
-                messages: [
-                  ChatMessage.system(_dreamSystemPrompt),
-                  ChatMessage.user(
-                    "## Long-term memory (most recent first)\n\n${mem.corpus}",
+            final res = await client.chat.completions
+                .create(
+                  ChatCompletionCreateRequest(
+                    model: envStore.llmModel,
+                    messages: [
+                      ChatMessage.system(_dreamSystemPrompt),
+                      ChatMessage.user(
+                        "## Long-term memory (most recent first)\n\n"
+                        "${mem.corpus}",
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            );
+                )
+                .timeout(_dreamTimeout);
             final next = res.choices.firstOrNull?.message.content?.trim();
             if (next == null || next.isEmpty) {
               logger.warning(
@@ -296,11 +216,16 @@ class DreamWorkingState extends Fx<String> {
               "[dream] rebuilt working memory from ${mem.files} file(s) "
               "→ ${next.length} chars",
             );
-            final preview =
-                next.length > 600 ? "${next.substring(0, 600)}…" : next;
+            final preview = _dreamPreview(next, 600);
             return "💤 <b>Dreamed.</b> Rebuilt working memory from "
                 "${mem.files} memory file(s) → ${next.length} chars.\n\n"
                 "<pre>${_escapeHtml(preview)}</pre>";
+          } on TimeoutException {
+            logger.warning(
+              "[dream] timed out after ${_dreamTimeout.inSeconds}s — "
+              "working memory left unchanged",
+            );
+            return "💤 Dream timed out — working memory left unchanged.";
           } finally {
             client.close();
           }

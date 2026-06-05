@@ -31,12 +31,13 @@ String _renderManifest(IList<Capability> capabilities) {
 /// Builds the user message: per-event volatile content goes here so
 /// the system prompt above stays cacheable.
 ///
-/// The persistent working memory (when non-empty) is prepended as the
-/// most prominent block. It rides in the user message rather than the
-/// system prompt deliberately: the system prompt stays a stable,
-/// cacheable spine, while the continuously-rewritten working memory is
-/// volatile. It is injected on EVERY turn — the assistant never has to
-/// choose to recall it.
+/// The working-memory notes (when present) are prepended as BACKGROUND —
+/// not authority. They are the product of an explicit `/dream`
+/// consolidation, so they can be stale; the live vault and what the user
+/// says THIS turn are the source of truth. Framing them as "orient, then
+/// verify" is deliberate (#36): the previous "current and authoritative,
+/// never contradict" framing let stale/fabricated notes override reality
+/// and re-asserted the model's own inventions as user-established fact.
 String _buildUserMessage(
   String eventSummary,
   String eventContent,
@@ -45,10 +46,13 @@ String _buildUserMessage(
   final wm = workingState.trim();
   final header = wm.isEmpty
       ? ""
-      : "[Working memory — your continuously-integrated understanding so "
-          "far. It is current and authoritative; act consistently with it "
-          "without being asked, and never contradict it unless the user "
-          "changes it this turn.]\n$wm\n\n";
+      : "[Working notes — a background summary from your last /dream "
+          "consolidation. Use it to orient, but it may be stale: the vault "
+          "files and what the user says right now are the source of truth. "
+          "If anything here conflicts with the user this turn, the user is "
+          "right; verify against the vault before relying on a specific "
+          "fact, and never present these notes as something the user "
+          "established unless the vault confirms it.]\n$wm\n\n";
   return "$header$eventSummary\n\n[User content]\n$eventContent";
 }
 
@@ -125,10 +129,6 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
 
           final currentChatId = _currentChatIdFor(event.channel);
 
-          // Tool outcomes observed this turn, fed to the digestion pass so
-          // working memory records what actually happened (incl. failures).
-          final toolOutcomes = <String>[];
-
           final imagePaths = _extractImagePaths(
             event.content,
             config.vaultPath,
@@ -157,7 +157,6 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
               case AgentToolStarted(:final name, :final args):
                 yield PipelineToolStarted(name: name, args: args);
               case AgentToolFinished(:final name, :final ok):
-                toolOutcomes.add("$name → ${ok ? "ok" : "FAILED"}");
                 yield PipelineToolFinished(name: name, ok: ok);
               case AgentFinished(:final result):
                 final suppressed = heartbeatMode &&
@@ -183,32 +182,14 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
                   wrotePaths: result.writtenPaths,
                   hadReply: !heartbeatMode && replyText != null,
                 );
-                // Deliver the reply first, then integrate the turn into
-                // persistent working memory. Heartbeats are skipped to bound
-                // token cost. Digestion is best-effort: any failure is logged
-                // and never breaks the reply that already went out.
+                // #36: deliver the reply. There is no per-turn memory
+                // rewrite anymore — durable facts live in the vault
+                // (journal/knowledge/people, written by capabilities) and in
+                // the conversation record; the working notes are refreshed
+                // only by an explicit /dream. This removes the silent
+                // generative digest that fabricated/dropped facts, plus its
+                // second per-turn LLM round-trip.
                 yield PipelineReply(event: event, text: replyText);
-                final didSomething = replyText != null ||
-                    result.toolsCalled.isNotEmpty ||
-                    result.writtenPaths.isNotEmpty;
-                if (!heartbeatMode && didSomething) {
-                  try {
-                    await DigestWorkingState(
-                      envStore: envStore,
-                      vaultPath: config.vaultPath,
-                      priorState: workingState,
-                      inbound: event.content,
-                      reply: replyText,
-                      toolOutcomes: toolOutcomes.toIList(),
-                      logger: logger,
-                    );
-                  } on Object catch (e, st) {
-                    logger.warning(
-                      "[$_agentId] working-memory digest failed: $e",
-                      stackTrace: st,
-                    );
-                  }
-                }
             }
           }
         });
