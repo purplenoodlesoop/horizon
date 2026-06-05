@@ -325,9 +325,25 @@ Stream<AgentEvent> _runLoop({
       // Emit start events synchronously, run executions in parallel,
       // then emit finish events in original order.
       final parsedArgs = <IMap<String, String>>[];
+      final argErrors = <String?>[];
       for (final call in toolCalls) {
-        final args = _parseArgs(call.function.arguments);
+        // #31: tolerate malformed tool-call JSON. A FormatException here
+        // used to propagate and kill the whole turn; instead record a
+        // recoverable error the model reads on its next cycle.
+        IMap<String, String> args;
+        String? argError;
+        try {
+          args = _parseArgs(call.function.arguments);
+        } on FormatException catch (e) {
+          args = IMap<String, String>();
+          argError = "Error: tool arguments were not valid JSON ($e). "
+              "Re-issue the call with valid JSON arguments.";
+          logger.warning(
+            "[$agentId] bad tool-call JSON for ${call.function.name}: $e",
+          );
+        }
         parsedArgs.add(args);
+        argErrors.add(argError);
         logger.debug(
           "[$agentId] Tool: ${call.function.name}"
           "(${call.function.arguments})",
@@ -352,16 +368,18 @@ Stream<AgentEvent> _runLoop({
 
       final toolResults = await Future.wait([
         for (var i = 0; i < toolCalls.length; i++)
-          _dispatchToolCall(
-            allowlist: allowlist,
-            toolName: toolCalls[i].function.name,
-            toolArgs: parsedArgs[i],
-            vaultPath: vaultPath,
-            envStore: envStore,
-            currentTelegramChatId: currentTelegramChatId,
-            logger: logger,
-            agentId: agentId,
-          ),
+          argErrors[i] != null
+              ? Future<String>.value(argErrors[i]!)
+              : _dispatchToolCall(
+                  allowlist: allowlist,
+                  toolName: toolCalls[i].function.name,
+                  toolArgs: parsedArgs[i],
+                  vaultPath: vaultPath,
+                  envStore: envStore,
+                  currentTelegramChatId: currentTelegramChatId,
+                  logger: logger,
+                  agentId: agentId,
+                ),
       ]);
 
       for (var i = 0; i < toolCalls.length; i++) {
@@ -605,13 +623,21 @@ Future<String> _dispatchToolCall({
         "calling send_telegram here produces a duplicate. Use "
         "send_telegram only for OTHER chats.";
   }
-  return ExecuteTool(
-    allowlist: allowlist,
-    toolName: toolName,
-    toolArgs: toolArgs,
-    vaultPath: vaultPath,
-    envStore: envStore,
-  );
+  // #31: a tool that throws at spawn (e.g. a ProcessException, or any
+  // other execution failure) must not kill the whole turn — return the
+  // failure as a tool result the model can read and react to next cycle.
+  try {
+    return await ExecuteTool(
+      allowlist: allowlist,
+      toolName: toolName,
+      toolArgs: toolArgs,
+      vaultPath: vaultPath,
+      envStore: envStore,
+    );
+  } on Object catch (e) {
+    logger.error("[$agentId] tool '$toolName' failed to execute: $e");
+    return "Error: tool '$toolName' failed to execute: $e";
+  }
 }
 
 IMap<String, String> _parseArgs(String argumentsJson) {
