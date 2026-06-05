@@ -28,6 +28,45 @@ String _renderManifest(IList<Capability> capabilities) {
       .join("\n");
 }
 
+/// #38: ground the model's self-knowledge in its REAL, current tools.
+/// The system prompt otherwise advertises only capability descriptions
+/// and bare tool schemas, so the model infers affordances and fabricates
+/// ones it lacks (promising sends it can't do, asking for a chat_id that
+/// cannot satisfy the outbound gate). Derived from the LIVE allowlist
+/// every turn — dynamic real state, not a hand-written capability sheet.
+String _renderAffordances(IList<AllowlistedTool> allowlist) {
+  if (allowlist.isEmpty) {
+    return "";
+  }
+  final names = allowlist.map((t) => t.name).join(", ");
+  final hasTelegramSend = allowlist.any(
+    (t) => t.parameters.values.any((p) => p.type == "telegram_chat_id"),
+  );
+  final buffer = StringBuffer()
+    ..writeln()
+    ..writeln()
+    ..writeln(
+      "[Your actual tools right now] These are the ONLY actions you can "
+      "take: $names.",
+    )
+    ..writeln(
+      "If something you are asked to do has no matching tool above, you "
+      "cannot do it — say so plainly. Never claim or promise an action you "
+      "have no tool for, and never report an action as done unless its "
+      "tool returned success this turn.",
+    );
+  if (hasTelegramSend) {
+    buffer.writeln(
+      "Outbound messaging only reaches a chat that has already messaged "
+      "this bot; an unknown chat_id is rejected. You cannot initiate "
+      "contact with someone new, reach a person by @username, or look up a "
+      "chat_id — do not ask the user for one as a workaround, it cannot "
+      "work.",
+    );
+  }
+  return buffer.toString();
+}
+
 /// Builds the user message: per-event volatile content goes here so
 /// the system prompt above stays cacheable.
 ///
@@ -112,12 +151,14 @@ class RunCentralizedPipeline extends StreamFx<PipelineEvent> {
             decayThreshold,
           );
           final manifest = _renderManifest(capabilities);
-          final systemPrompt = await LoadSystemPrompt(
+          final basePrompt = await LoadSystemPrompt(
             vaultPath: config.vaultPath,
             templatesPath: config.templatesPath,
             manifest: manifest,
             heartbeatMode: heartbeatMode,
           );
+          // #38: ground the model in its real, current affordances.
+          final systemPrompt = basePrompt + _renderAffordances(allowlist);
           final workingState = await LoadWorkingState(
             vaultPath: config.vaultPath,
           );
