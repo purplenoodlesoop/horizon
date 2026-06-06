@@ -16,10 +16,13 @@ import "package:openai_dart/openai_dart.dart";
 // keep arriving; only fails on truly stuck connections. Prior wall-
 // clock 60s timeout fired on slow-but-progressing streams.
 const _idleTimeout = Duration(seconds: 90);
-// Retry only the establishment phase: if the stream fails before any
-// chunk arrives. Mid-stream failures are not retried because partial
-// output may already be visible to the user.
-const _maxEstablishmentRetries = 2;
+// Retry the establishment phase (failure before any chunk arrives) with
+// exponential backoff, so a transient provider blip — crof.ai 502s, rate
+// limits, idle timeouts, connection drops — is ridden out instead of
+// failing the whole turn. Mid-stream failures are not retried (partial
+// output may already be visible); neither are permanent 4xx client
+// errors. See _isRetryableLlmError. Backoff is 1,2,4,8s across attempts.
+const _maxEstablishmentRetries = 4;
 
 const _capabilitiesPrefix = "_horizon/capabilities/";
 
@@ -98,6 +101,24 @@ class RunAgentLlm extends StreamFx<AgentEvent> {
         });
 }
 
+/// True if an establishment-phase LLM failure is worth retrying: a
+/// transient provider/network problem (5xx incl. 502 Bad Gateway, 429
+/// rate limit, request timeout, connection or stream hiccup) rather than
+/// a permanent 4xx client error or an explicit abort.
+bool _isRetryableLlmError(Object e) {
+  if (e is TimeoutException || e is SocketException) {
+    return true;
+  }
+  return switch (e) {
+    RequestTimeoutException() => true,
+    ConnectionException() => true,
+    StreamException() => true,
+    AbortedException() => false,
+    ApiException(:final statusCode) => statusCode >= 500 || statusCode == 429,
+    _ => true,
+  };
+}
+
 /// Streams a single LLM call and emits per-cycle deltas. Returns
 /// the final accumulator (with content, reasoning, tool calls,
 /// finish reason, usage) when the SSE stream ends.
@@ -113,110 +134,69 @@ Stream<AgentEvent> _streamCycle({
   required void Function(ChatStreamAccumulator) onComplete,
 }) async* {
   for (var attempt = 0; attempt <= _maxEstablishmentRetries; attempt++) {
-    final controller = StreamController<AgentEvent>();
-    Timer? idleTimer;
     var firstChunkArrived = false;
-    StreamSubscription<ChatStreamAccumulator>? sub;
-    ChatStreamAccumulator? lastAcc;
     var lastReasoningLen = 0;
     var lastContentLen = 0;
-
-    void teardown() {
-      idleTimer?.cancel();
-      idleTimer = null;
-      final s = sub;
-      if (s != null) {
-        unawaited(s.cancel());
-      }
-    }
-
-    void failAndClose(Object error, [StackTrace? st]) {
-      controller.addError(error, st);
-      unawaited(controller.close());
-    }
-
-    void resetIdle() {
-      idleTimer?.cancel();
-      idleTimer = Timer(_idleTimeout, () {
-        if (controller.isClosed) {
-          return;
-        }
-        teardown();
-        failAndClose(
-          TimeoutException(
-            "LLM stream idle for ${_idleTimeout.inSeconds}s",
-          ),
-        );
-      });
-    }
-
-    resetIdle();
-    sub = client.chat.completions
-        .createStreamWithAccumulator(request)
-        .listen(
-      (acc) {
+    ChatStreamAccumulator? lastAcc;
+    try {
+      // Consume the SSE stream directly with `await for` so a stream error
+      // (provider 5xx/502, connection drop, idle timeout) is caught by the
+      // local try/catch and can be retried. The previous StreamController +
+      // `yield* controller.stream` indirection forwarded such errors to the
+      // downstream listener instead, escaping this retry entirely. The idle
+      // `.timeout` resets on every event, so a long-but-progressing
+      // completion keeps flowing; only a truly stalled gap fails.
+      final stream = client.chat.completions
+          .createStreamWithAccumulator(request)
+          .timeout(
+        _idleTimeout,
+        onTimeout: (sink) => sink.addError(
+          TimeoutException("LLM stream idle for ${_idleTimeout.inSeconds}s"),
+        ),
+      );
+      await for (final acc in stream) {
         firstChunkArrived = true;
-        resetIdle();
         lastAcc = acc;
         // Reasoning: prefer reasoning_content, fall back to reasoning.
         final r = acc.reasoningContent.isNotEmpty
             ? acc.reasoningContent
             : acc.reasoning;
         if (r.length > lastReasoningLen) {
-          final delta = r.substring(lastReasoningLen);
+          yield AgentReasoningDelta(r.substring(lastReasoningLen));
           lastReasoningLen = r.length;
-          if (!controller.isClosed) {
-            controller.add(AgentReasoningDelta(delta));
-          }
         }
         final c = _sanitizeStreamingContent(acc.content);
         if (c.length > lastContentLen) {
-          final delta = c.substring(lastContentLen);
+          yield AgentTextDelta(c.substring(lastContentLen));
           lastContentLen = c.length;
-          if (!controller.isClosed) {
-            controller.add(AgentTextDelta(delta));
-          }
         }
-      },
-      onDone: () {
-        teardown();
-        if (controller.isClosed) {
-          return;
-        }
-        final acc = lastAcc;
-        if (acc != null) {
-          onComplete(acc);
-        }
-        unawaited(controller.close());
-      },
-      onError: (Object e, StackTrace st) {
-        teardown();
-        if (controller.isClosed) {
-          return;
-        }
-        failAndClose(e, st);
-      },
-    );
-
-    try {
-      yield* controller.stream;
-      // Successful completion of the inner stream — break out.
+      }
+      // Stream finished cleanly.
+      if (lastAcc != null) {
+        onComplete(lastAcc);
+      }
       return;
     } on Object catch (e) {
-      // Establishment-phase failure: retry. Otherwise propagate.
-      if (firstChunkArrived || attempt >= _maxEstablishmentRetries) {
+      // Retry only an establishment-phase failure (before any chunk) that
+      // is transient — provider 5xx/502, rate limit, timeout, connection or
+      // stream hiccup — with exponential backoff. Mid-stream failures
+      // (partial output already shown) and permanent 4xx client errors
+      // propagate immediately.
+      if (firstChunkArrived ||
+          attempt >= _maxEstablishmentRetries ||
+          !_isRetryableLlmError(e)) {
         rethrow;
       }
+      final delay = e is RateLimitException && e.retryAfter != null
+          ? e.retryAfter!
+          : Duration(seconds: 1 << attempt);
       logger.warning(
         "[$agentId] LLM stream error before any chunk: $e — "
-        "retry ${attempt + 1}/$_maxEstablishmentRetries",
+        "retry ${attempt + 1}/$_maxEstablishmentRetries "
+        "in ${delay.inMilliseconds}ms",
       );
+      await Future<void>.delayed(delay);
       continue;
-    } finally {
-      // Defensive: cancel even on consumer-cancellation paths where
-      // `controller.stream` ends without our onDone/onError firing.
-      await sub.cancel();
-      idleTimer?.cancel();
     }
   }
 }
