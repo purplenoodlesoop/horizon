@@ -633,6 +633,7 @@ Future<String> _dispatchToolCall({
       toolArgs: toolArgs,
       vaultPath: vaultPath,
       envStore: envStore,
+      currentChatId: currentTelegramChatId,
     );
   } on Object catch (e) {
     logger.error("[$agentId] tool '$toolName' failed to execute: $e");
