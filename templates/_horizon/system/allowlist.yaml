@@ -90,7 +90,7 @@ tools:
       url:
         type: string
         description: Full URL including https:// or http://
-    command: "curl -sSL --max-time 20 -A 'Horizon/1.0' {url}"
+    command: "if b=$(curl -sSL --max-time 20 -A 'Horizon/1.0' --fail-with-body {url} 2>/dev/null); then printf '%s' \"$b\"; else printf 'Error: the request failed or the server returned an HTTP error status. Any text below is the error page or a partial response, NOT the content you asked for — do not present it as the real answer:\\n%s' \"$b\"; fi"
 
   - name: fetch_url_text
     description: Fetch a webpage and return readable markdown via Jina Reader. Use for HTML pages where you want clean text content without ads, nav, or markup noise.
@@ -98,7 +98,7 @@ tools:
       url:
         type: string
         description: Full URL including https:// or http://
-    command: "curl -sSL --max-time 30 -A 'Horizon/1.0' 'https://r.jina.ai/'{url}"
+    command: "if b=$(curl -sSL --max-time 30 -A 'Horizon/1.0' --fail-with-body 'https://r.jina.ai/'{url} 2>/dev/null); then printf '%s' \"$b\"; else printf 'Error: the page fetch failed (the reader service or the target URL returned an error). Any text below is an error page, NOT the content — do not present it as the answer:\\n%s' \"$b\"; fi"
 
   - name: web_search
     description: Search the web with Tavily and return top results as JSON. Use when you need information from the web that you don't already know - news, current facts, references, anything beyond the vault.
@@ -122,8 +122,8 @@ tools:
         description: "The user-message text the orchestrator will receive when the reminder fires. Phrase it as if the user just sent the message — e.g. 'Time to call mom — tell me what to say.'"
       deliver:
         type: string
-        description: "Delivery target: 'telegram(<chat_id>)' (most common — find chat_id in _horizon/messages/ frontmatter), 'none' (silent), or 'origin' (only useful if the schedule was created via tool with a recorded origin chat)."
-    command: "mkdir -p {vault_path}/_horizon/schedules && { printf -- '---\\nid: %s\\nschedule: %s\\ndeliver: %s\\ncreated_by: agent\\ncreated_at: %s\\nexpires_after: 1\\nprompt: |\\n' {id} {fire_at} {deliver} \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" && printf '%s' {prompt} | sed 's/^/  /'; printf '\\n---\\n'; } > {vault_path}/_horizon/schedules/{id}.md && echo Scheduled {id} for {fire_at}"
+        description: "Delivery target. For a reminder meant for the person you are talking to right now, use 'origin' (or just leave it 'origin') — the harness auto-resolves it to the CURRENT chat at creation, so it always reaches them. Use 'telegram(<chat_id>)' only to target a DIFFERENT chat (chat_id from _horizon/messages/ frontmatter). Use 'none' for a silent run. Note: outside a live chat (e.g. created during a heartbeat) 'origin' has no chat to resolve to and won't deliver — pass an explicit telegram(<chat_id>) there."
+    command: "d={deliver}; case \"$d\" in origin|\"\") [ -n \"$HORIZON_CHAT_ID\" ] && d=\"telegram($HORIZON_CHAT_ID)\";; esac; mkdir -p {vault_path}/_horizon/schedules && { printf -- '---\\nid: %s\\nschedule: %s\\ndeliver: %s\\ncreated_by: agent\\ncreated_at: %s\\nexpires_after: 1\\nprompt: |\\n' {id} {fire_at} \"$d\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" && printf '%s' {prompt} | sed 's/^/  /'; printf '\\n---\\n'; } > {vault_path}/_horizon/schedules/{id}.md && echo \"Scheduled {id} for {fire_at} (deliver: $d)\""
 
   - name: schedule_cron
     description: "Schedule a recurring job using a 5-field cron expression. Use for 'every morning at 9', 'every weekday', 'every Sunday'. For one-shot reminders, use schedule_reminder."
@@ -139,8 +139,8 @@ tools:
         description: "The user-message text the orchestrator will receive on each fire."
       deliver:
         type: string
-        description: "Delivery target: 'telegram(<chat_id>)', 'none', or 'origin'."
-    command: "mkdir -p {vault_path}/_horizon/schedules && { printf -- '---\\nid: %s\\nschedule: %s\\ndeliver: %s\\ncreated_by: agent\\ncreated_at: %s\\nprompt: |\\n' {id} {cron} {deliver} \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" && printf '%s' {prompt} | sed 's/^/  /'; printf '\\n---\\n'; } > {vault_path}/_horizon/schedules/{id}.md && echo Scheduled cron {id}"
+        description: "Delivery target. 'origin' (default) auto-resolves to the chat you are talking in now; 'telegram(<chat_id>)' targets a specific other chat; 'none' is silent. Outside a live chat, 'origin' won't deliver — use telegram(<chat_id>)."
+    command: "d={deliver}; case \"$d\" in origin|\"\") [ -n \"$HORIZON_CHAT_ID\" ] && d=\"telegram($HORIZON_CHAT_ID)\";; esac; mkdir -p {vault_path}/_horizon/schedules && { printf -- '---\\nid: %s\\nschedule: %s\\ndeliver: %s\\ncreated_by: agent\\ncreated_at: %s\\nprompt: |\\n' {id} {cron} \"$d\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" && printf '%s' {prompt} | sed 's/^/  /'; printf '\\n---\\n'; } > {vault_path}/_horizon/schedules/{id}.md && echo \"Scheduled cron {id} (deliver: $d)\""
 
   - name: cancel_schedule
     description: "Delete a schedule entry by id. Use when the user says 'cancel that reminder' or you decide a previously-set schedule is no longer needed. Idempotent — deleting a non-existent schedule is a no-op."

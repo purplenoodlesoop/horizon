@@ -38,12 +38,14 @@ class ExecuteTool extends Fx<String> {
     required IMap<String, String> toolArgs,
     required String vaultPath,
     required EnvStore envStore,
+    String? currentChatId,
   }) : super(() async {
           // Snapshot tokens at execution start. The executor reads
           // them via envStore so live `.env` rotation takes effect on
           // the next tool call without restarting the harness.
           final telegramToken = envStore.telegramToken;
           final tavilyToken = envStore.tavilyToken;
+          final chatId = currentChatId;
           final tool = allowlist
               .where((t) => t.name == toolName)
               .firstOrNull;
@@ -114,6 +116,11 @@ class ExecuteTool extends Fx<String> {
               ...Platform.environment,
               if (telegramToken.isNotEmpty) "TELEGRAM_TOKEN": telegramToken,
               if (tavilyToken.isNotEmpty) "TAVILY_TOKEN": tavilyToken,
+              // D8: the chat the agent is talking in (telegram turns only).
+              // Lets schedule_* resolve `deliver: origin`/blank to this chat,
+              // so a reminder created here is never a silent black hole.
+              if (chatId != null && chatId.isNotEmpty)
+                "HORIZON_CHAT_ID": chatId,
             },
             includeParentEnvironment: false,
           );
