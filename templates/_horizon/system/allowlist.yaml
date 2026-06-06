@@ -39,7 +39,7 @@ tools:
       query:
         type: string
         description: "A keyword, word-stem, or extended-regex (grep -E). Case-insensitive."
-    command: "grep -rniE --include='*.md' --exclude-dir=_horizon --exclude-dir=dataview -B1 -A2 {query} {vault_path} 2>/dev/null | sed \"s#{vault_path}/##\" | head -150"
+    command: "r=$(grep -rniE --include='*.md' --exclude-dir=_horizon --exclude-dir=dataview -B1 -A2 {query} {vault_path} 2>/dev/null | sed \"s#{vault_path}/##\" | head -150); if [ -n \"$r\" ]; then printf '%s\\n' \"$r\"; else echo \"No note body matched {query}. This is NOT proof you have nothing on it — a body search misses a different wording, another language, a title-only mention, or the excluded _horizon/ and dataview/ folders. Before telling the user no such note exists, run list_notes to scan every note by title.\"; fi"
 
   - name: list_notes
     description: "List every note you have, with its title — so you can see WHAT ALREADY EXISTS before searching, and never offer to create a note that is already there. Path + title, one per line. Skips the system namespace and your dataview/ views."
@@ -62,7 +62,7 @@ tools:
       path:
         type: string
         description: Path glob relative to vault root, e.g. "todos/*.md", "people/*.md".
-    command: "find {vault_path} -type f -wholename {vault_path}/{path} -exec grep -lE {query} {} + 2>/dev/null | wc -l | tr -d ' '"
+    command: "files=$(find {vault_path} -type f -wholename {vault_path}/{path} 2>/dev/null | wc -l | tr -d ' '); if [ \"$files\" = 0 ]; then echo \"0 — WARNING: the glob {path} matched no files at all, so this is not a real count; the path shape is probably wrong. Use list_files_glob to find the correct path before reporting a count.\"; else find {vault_path} -type f -wholename {vault_path}/{path} -exec grep -lE {query} {} + 2>/dev/null | wc -l | tr -d ' '; fi"
 
   - name: delete_file
     description: Delete a file from the vault
@@ -70,7 +70,7 @@ tools:
       path:
         type: path
         description: Relative path within the vault
-    command: "rm -f {vault_path}/{path}"
+    command: "if [ -e {vault_path}/{path} ]; then rm -f {vault_path}/{path} && echo \"Deleted {path}\"; else echo \"Nothing to delete — {path} does not exist in the vault.\"; fi"
 
   - name: now
     description: "Returns the current LOCAL datetime WITH its explicit UTC offset, weekday name, ISO week, and ISO day-of-week (1=Mon..7=Sun). Format: `YYYY-MM-DDTHH:MM:SS+OO:OO Weekday (week NN, day N)` (e.g. `2026-05-09T21:23:11+03:00 Saturday (week 19, day 6)`). This IS the user's real wall-clock time — use it whenever you need the time, the date, the weekday, or to compute a date relative to now. The offset is explicit so you never guess the timezone; pass times back to schedule_* in this same offset-qualified form."
@@ -82,7 +82,7 @@ tools:
       pattern:
         type: string
         description: Glob pattern. With a slash - path relative to vault root, "*" matches one segment. Without a slash - basename matched recursively. Examples - "todos/*.md", "_horizon/turns/*.md", "*.json", "people/*.md"
-    command: "case {pattern} in */*) find {vault_path} -type f -wholename {vault_path}/{pattern} 2>/dev/null ;; *) find {vault_path} -type f -name {pattern} 2>/dev/null ;; esac | sort"
+    command: "r=$(case {pattern} in */*) find {vault_path} -type f -wholename {vault_path}/{pattern} 2>/dev/null ;; *) find {vault_path} -type f -name {pattern} 2>/dev/null ;; esac | sort); if [ -n \"$r\" ]; then printf '%s\\n' \"$r\"; else echo \"No files match {pattern}. Empty means the glob did not match, not that the files are absent — check the shape: a star matches one path segment and never crosses a slash, double-star is unsupported, use a slash for path-relative or no slash for basename-anywhere.\"; fi"
 
   - name: fetch_url
     description: Fetch a URL and return its raw response body. Use for JSON APIs, plain-text endpoints, or when you specifically want raw HTML. For human-readable web pages, prefer fetch_url_text which strips HTML to readable markdown.
@@ -106,7 +106,7 @@ tools:
       query:
         type: string
         description: Search query in plain English
-    command: "jq -n --arg key \"$TAVILY_TOKEN\" --arg q {query} '{api_key:$key,query:$q,max_results:5,search_depth:\"basic\"}' | curl -sS --max-time 30 -X POST 'https://api.tavily.com/search' -H 'Content-Type: application/json' -d @-"
+    command: "if [ -z \"$TAVILY_TOKEN\" ]; then echo 'Error: web_search is not configured (TAVILY_TOKEN unset). You cannot search the web right now — tell the user web search is unavailable rather than guessing.' >&2; exit 1; fi; jq -n --arg key \"$TAVILY_TOKEN\" --arg q {query} '{api_key:$key,query:$q,max_results:5,search_depth:\"basic\"}' | curl -sS --max-time 30 -X POST 'https://api.tavily.com/search' -H 'Content-Type: application/json' -d @-"
 
   - name: schedule_reminder
     description: "Schedule a one-shot reminder. Fires once at fire_at, then auto-deletes. Use when the user says 'remind me at X', 'in 30 minutes', 'tomorrow at 9'. For recurring jobs (every weekday, every Friday at noon), use schedule_cron instead."
@@ -148,7 +148,7 @@ tools:
       id:
         type: string
         description: "Schedule id (the same id used when creating it)."
-    command: "rm -f {vault_path}/_horizon/schedules/{id}.md {vault_path}/_horizon/schedules/.lastfire/{id} {vault_path}/_horizon/schedules/.firecount/{id} && echo Cancelled {id}"
+    command: "if [ -e {vault_path}/_horizon/schedules/{id}.md ]; then rm -f {vault_path}/_horizon/schedules/{id}.md {vault_path}/_horizon/schedules/.lastfire/{id} {vault_path}/_horizon/schedules/.firecount/{id}; echo \"Cancelled {id}\"; else echo \"No schedule named {id} exists — nothing to cancel.\"; fi"
 
   - name: list_schedules
     description: "List active schedule entries. Returns id + schedule field for each. Use when the user asks 'what reminders do I have' or 'what's scheduled'."
