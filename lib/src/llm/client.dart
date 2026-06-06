@@ -123,9 +123,14 @@ bool _isRetryableLlmError(Object e) {
 /// the final accumulator (with content, reasoning, tool calls,
 /// finish reason, usage) when the SSE stream ends.
 ///
-/// Idle timeout: cancels and retries (up to [_maxEstablishmentRetries]
-/// total attempts) only if the failure happens before the first
-/// chunk arrives. Once any chunk has been emitted, errors propagate.
+/// Consumed with `await for` so stream errors are caught locally. A
+/// transient establishment-phase failure (before the first chunk —
+/// provider 5xx/502, 429, request timeout, connection drop) is retried
+/// with exponential backoff up to [_maxEstablishmentRetries] times; see
+/// [_isRetryableLlmError]. Once any chunk has been emitted, or for a
+/// permanent 4xx client error, the error propagates. An idle gap longer
+/// than [_idleTimeout] between chunks fails the attempt (and is itself
+/// retryable while still pre-first-chunk).
 Stream<AgentEvent> _streamCycle({
   required OpenAIClient client,
   required ChatCompletionCreateRequest request,
