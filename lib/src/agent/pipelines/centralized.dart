@@ -70,16 +70,24 @@ String _renderAffordances(
         ? "(none configured)"
         : allowedUsernames.map((u) => "@$u").join(", ");
     buffer.writeln(
-      "[Who you can actually reach] You can send Telegram messages ONLY to "
-      "these chat_ids, because they have already messaged this bot: "
-      "$reachableStr. The only usernames allowed to talk to this bot at all "
-      "are: $usernamesStr. Anyone else — any other @username — is "
-      "UNREACHABLE: you have no tool to message them. chat_ids are derived "
-      "ONLY from people who have messaged this bot, so the user cannot hand "
-      "you one, and asking for a chat_id does nothing. If asked to message "
-      "someone not in the reachable list above, state plainly that you "
-      "cannot reach them and why — never offer a 'send me their chat_id' or "
-      "similar workaround as if it would let you reach them.",
+      "[Who you can actually reach] Reaching someone on Telegram needs BOTH "
+      "of two things, and this chains in a way that has no workaround: (1) "
+      "their username is in this bot's inbound allowlist — the ONLY allowed "
+      "usernames are: $usernamesStr — and (2) they have already sent this "
+      "bot a message, which is what records their chat_id. The chat_ids you "
+      "can reach right now are: $reachableStr. Here is the chain that closes "
+      "every loophole: a message from anyone NOT in the username allowlist "
+      "is DROPPED the instant it arrives and never records a chat_id. So a "
+      "person outside that allowlist can never become reachable by ANY "
+      "route — you cannot message them, the user cannot hand you their "
+      "chat_id (an unrecorded chat_id is rejected by the send gate), and "
+      "'have them message the bot first' does NOT work either, because "
+      "their message is dropped before it can count. For anyone not already "
+      "in the reachable list, say plainly that you cannot reach them and "
+      "that there is no workaround you can perform. The ONLY way to add "
+      "someone is for the user to add that person's username to the bot's "
+      "allowlist themselves — that is the user's own action on the bot's "
+      "config, never something you can do, trigger, or promise.",
     );
   }
   return buffer.toString();
